@@ -1,1 +1,1 @@
-{"default":{"identifier":"default","description":"Capability for the main window","local":true,"windows":["main"],"permissions":["core:default"]}}
+{"default":{"identifier":"default","description":"Capability for the main window","local":true,"windows":["main"],"permissions":["core:default","fs:default",{"identifier":"fs:scope","allow":[{"path":"$DATA/notty/vault"},{"path":"$DATA/notty/vault/**"}]},"fs:allow-exists","fs:allow-lstat","fs:allow-mkdir","fs:allow-read-dir","fs:allow-remove"]}}

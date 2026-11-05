@@ -3,5 +3,20 @@
   "identifier": "default",
   "description": "Capability for the main window",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "fs:default",
+    {
+      "identifier": "fs:scope",
+      "allow": [
+        { "path": "$DATA/notty/vault" },
+        { "path": "$DATA/notty/vault/**" }
+      ]
+    },
+    "fs:allow-exists",
+    "fs:allow-lstat",
+    "fs:allow-mkdir",
+    "fs:allow-read-dir",
+    "fs:allow-remove"
+  ]
 }
