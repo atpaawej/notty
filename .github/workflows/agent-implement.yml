@@ -208,6 +208,12 @@ jobs:
           BRANCH: ${{ steps.preflight.outputs.branch }}
         run: |
           set -euo pipefail
+          # main can move while the agent runs. Rebase first: without this, a
+          # commit to main that touches a workflow file makes this branch look
+          # like it modifies that workflow, and GitHub rejects the push without
+          # the `workflows` permission.
+          git fetch origin main
+          git rebase origin/main
           # Deterministic branch; a stale remote branch is a recoverable orphan.
           git push --force origin "HEAD:refs/heads/${BRANCH}"
 
