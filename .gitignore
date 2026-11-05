@@ -8,3 +8,5 @@ notty.db
 *.db-journal
 *.db-wal
 .env
+# Agent-written PR description; the factory moves it out before staging.
+.factory-pr-body.md

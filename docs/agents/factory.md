@@ -29,7 +29,7 @@ This is the single-issue loop, plus the queue. Wider loops (automated review, PR
 
 ## PR descriptions
 
-A reviewer should not have to reconstruct intent from a diff. The agent writes `/tmp/factory-pr-body.md` before it stops — the one moment when it still remembers what it tried, what it skipped, and what it decided. `.github/scripts/build-pr-body.sh` renders it.
+A reviewer should not have to reconstruct intent from a diff. The agent writes `/tmp/factory-pr-body.md` before it stops — the one moment when it still remembers what it tried, what it skipped, and what it decided. If its tools cannot write outside the repo it uses `.factory-pr-body.md` in the root instead; the catch-all commit step moves that out before staging, so it never reaches the branch. `.github/scripts/build-pr-body.sh` renders it.
 
 The agent's file must use these headings: **Summary**, **What changed**, **Decisions and deviations**, **Verification**, **Gaps and follow-ups**, **Review guide**.
 

@@ -161,6 +161,7 @@ jobs:
             printf -- '- Commit your work in small commits with messages like "Part of #%s: ...".\n' "$N"
             printf -- '- If you are genuinely blocked, stop and leave a note in .factory-blocked.txt explaining why.\n'
             printf '\nBefore you finish, write the pull request description to /tmp/factory-pr-body.md.\n'
+            printf 'If your tools cannot write outside the repository, write `.factory-pr-body.md` in the repository root instead.\n'
             printf 'It becomes the body of the draft PR, so write it for a reviewer who has not seen your work.\n\n'
             printf 'Use exactly these headings:\n\n'
             printf '## Summary\n'
@@ -199,6 +200,12 @@ jobs:
           N: ${{ github.event.issue.number || inputs.issue_number }}
         run: |
           set -euo pipefail
+          # The agent may not be able to write outside the repo. Accept the
+          # in-repo location too, and move it out before the catch-all commit so
+          # it never lands in the branch.
+          if [ -f .factory-pr-body.md ]; then
+            mv -f .factory-pr-body.md /tmp/factory-pr-body.md
+          fi
           git add -A
           if ! git diff --cached --quiet; then
             git commit -m "Part of #${N}: factory catch-all commit"
