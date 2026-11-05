@@ -160,6 +160,22 @@ jobs:
             printf -- '- Run `npm run typecheck`, `npm test`, `npm run depcruise` and `npm run build`; they must all pass.\n'
             printf -- '- Commit your work in small commits with messages like "Part of #%s: ...".\n' "$N"
             printf -- '- If you are genuinely blocked, stop and leave a note in .factory-blocked.txt explaining why.\n'
+            printf '\nBefore you finish, write the pull request description to /tmp/factory-pr-body.md.\n'
+            printf 'It becomes the body of the draft PR, so write it for a reviewer who has not seen your work.\n\n'
+            printf 'Use exactly these headings:\n\n'
+            printf '## Summary\n'
+            printf 'Two to four sentences: what this change makes possible.\n\n'
+            printf '## What changed\n'
+            printf 'Grouped by module, with file paths. Not a file dump.\n\n'
+            printf '## Decisions and deviations\n'
+            printf 'Anything a reviewer cannot infer from the diff, including where you departed from the issue.\n\n'
+            printf '## Verification\n'
+            printf 'The exact commands you ran and their outcome. Never claim a check you did not run.\n\n'
+            printf '## Gaps and follow-ups\n'
+            printf 'What you deliberately did not do, and what a reviewer should know.\n\n'
+            printf '## Review guide\n'
+            printf 'Where to start reading, and what deserves the most scrutiny.\n\n'
+            printf 'Rules for that file: no title line; do not write "Closes/Fixes/Resolves #N" (the orchestrator adds the real one and neutralises yours); keep it under 4000 characters; write only what you know.\n'
           } > /tmp/factory-prompt.txt
           wc -c /tmp/factory-prompt.txt
 
@@ -229,20 +245,36 @@ jobs:
           N: ${{ github.event.issue.number || inputs.issue_number }}
           BRANCH: ${{ steps.preflight.outputs.branch }}
           TITLE: ${{ steps.preflight.outputs.title }}
+          MODEL: ${{ inputs.model || 'opencode/deepseek-v4.1-flash-free' }}
         run: |
           set -euo pipefail
-          BODY=$(printf 'Closes #%s\n\nImplemented by the notty factory (opencode + DeepSeek V4.1 Flash Free) from the issue text. **Read the diff before merging — a human merge is mandatory.**\n' "$N")
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          # The agent writes /tmp/factory-pr-body.md. The script wraps it and owns
+          # the parts the agent must not: `Closes #N`, closing keywords in its
+          # prose, and the factual sections.
+          BODY_SOURCE=$(bash .github/scripts/build-pr-body.sh "$N" "$MODEL" "$RUN_URL")
+          BODY=$(cat /tmp/factory-pr-body.out.md)
+          echo "body_source=$BODY_SOURCE" >>"$GITHUB_OUTPUT"
 
           # REST, not `gh pr create`: that command goes through GraphQL, which
           # returned a generic 500 on run 42059874269 while the same request
           # over REST succeeded. Reuse an open PR when one already exists, so a
           # re-run does not depend on creating a second one.
-          PR_URL=$(gh api --method GET "repos/${GITHUB_REPOSITORY}/pulls" \
+          EXISTING=$(gh api --method GET "repos/${GITHUB_REPOSITORY}/pulls" \
             -f state=open \
             -f "head=${GITHUB_REPOSITORY_OWNER}:${BRANCH}" \
-            --jq '.[0].html_url // empty')
+            --jq '.[0] // empty | "\(.number) \(.html_url)"')
 
-          if [ -z "$PR_URL" ]; then
+          if [ -n "$EXISTING" ]; then
+            NUM=${EXISTING%% *}
+            PR_URL=${EXISTING#* }
+            # A re-run may have a better description; refresh it. Non-fatal: an
+            # existing PR is already the deliverable.
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/pulls/${NUM}" \
+              -f body="$BODY" >/dev/null 2>&1 \
+              || echo "::warning::could not refresh the body of PR #${NUM}"
+          else
             PR_URL=$(gh api --method POST "repos/${GITHUB_REPOSITORY}/pulls" \
               -f title="$TITLE" \
               -f head="$BRANCH" \
@@ -263,11 +295,16 @@ jobs:
           TITLE: ${{ steps.preflight.outputs.title }}
           PR_OUTCOME: ${{ steps.pr.outcome }}
           PR_URL: ${{ steps.pr.outputs.url }}
+          BODY_SOURCE: ${{ steps.pr.outputs.body_source }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
           if [ "$PR_OUTCOME" = "success" ] && [ -n "$PR_URL" ]; then
-            gh issue comment "$N" --body "Factory run opened draft PR: ${PR_URL}" || true
+            NOTE=""
+            if [ "$BODY_SOURCE" = "fallback" ]; then
+              NOTE=$'\n\nThe agent left no PR description, so the body was generated from the commits and diffstat.'
+            fi
+            gh issue comment "$N" --body "Factory run opened draft PR: ${PR_URL}.${NOTE}" || true
             exit 0
           fi
 
