@@ -1,0 +1,421 @@
+/**
+ * Private: the adapter-independent note-index behaviour.
+ *
+ * Everything that matters — startup recovery, save ordering, rebuild walking,
+ * search — is written once here over two seams: a SQL driver and note-file
+ * storage. The runtime adapters differ only in those two seams, so the file
+ * format and the index contract cannot drift between tests and the app.
+ */
+import { Effect } from "effect";
+import {
+  ATTACHMENTS_DIRECTORY,
+  parse,
+  serialize,
+  type Note,
+} from "../note-file";
+import type { SqlDriver, SqlStatement, SqlValue } from "./driver";
+import {
+  NoteIndexError,
+  type IndexedNote,
+  type ListOptions,
+  type NoteIndexShape,
+  type NoteSummary,
+} from "./service";
+import {
+  CREATE_SCHEMA,
+  DELETE_ALL_FTS,
+  DELETE_ALL_NOTES,
+  DELETE_FTS,
+  DROP_SCHEMA,
+  GET_NOTE,
+  GET_NOTE_PATH,
+  INSERT_FTS,
+  INTEGRITY_CHECK,
+  LIST_NOTES,
+  SCHEMA_VERSION,
+  SCHEMA_VERSION_QUERY,
+  SEARCH_NOTES,
+  SELECT_FINGERPRINTS,
+  TABLE_COUNT,
+  UPSERT_NOTE,
+  ftsQuery,
+  toIndexedNote,
+  toSummary,
+  type FingerprintRow,
+  type NoteRow,
+  type SummaryRow,
+} from "./sql";
+import type { NoteStorage, NoteStorageStat } from "./storage";
+
+const MARKDOWN_SUFFIX = ".md";
+const DEFAULT_SEARCH_LIMIT = 50;
+
+export interface OpenNoteIndexOptions {
+  /** Absolute vault root. Note files live beneath it. */
+  readonly root: string;
+  /** Absolute index path, or `null` for an in-memory database. */
+  readonly databasePath: string | null;
+  readonly openDriver: () => Promise<SqlDriver>;
+  readonly storage: NoteStorage;
+}
+
+export interface OpenedNoteIndex {
+  readonly index: NoteIndexShape;
+  readonly close: () => Promise<void>;
+}
+
+interface WalkedNote {
+  readonly path: string;
+  readonly mtime: number;
+  readonly size: number;
+}
+
+/**
+ * Open the index and make it agree with the vault.
+ *
+ * Startup is acquisition: a healthy, schema-matching, fingerprint-matching
+ * index opens as-is; anything else is treated as corrupt, rebuilt from the
+ * note files, and only then handed to callers.
+ */
+export const openNoteIndex = async (
+  options: OpenNoteIndexOptions,
+): Promise<OpenedNoteIndex> => {
+  const root = stripTrailingSlash(options.root);
+  let driver: SqlDriver | null = null;
+  let current = false;
+
+  try {
+    driver = await options.openDriver();
+    current =
+      (await isHealthy(driver)) &&
+      (await isCurrent(driver, root, options.storage));
+  } catch {
+    // A failed open, query or integrity check means the index is unusable.
+    current = false;
+  }
+
+  if (!current) {
+    if (driver !== null) {
+      await driver.close().catch(() => undefined);
+    }
+    if (options.databasePath !== null) {
+      await options.storage.remove(options.databasePath).catch(() => undefined);
+    }
+    driver = await options.openDriver();
+    await resetSchema(driver);
+    await replaceAll(driver, root, options.storage);
+  }
+
+  const open = driver;
+  if (open === null) {
+    throw new Error("The index driver could not be opened");
+  }
+  return {
+    index: makeNoteIndex(open, root, options.storage),
+    close: () => open.close(),
+  };
+};
+
+export const makeNoteIndex = (
+  driver: SqlDriver,
+  root: string,
+  storage: NoteStorage,
+): NoteIndexShape => {
+  const attempt = <A>(
+    operation: string,
+    path: string | undefined,
+    run: () => Promise<A>,
+  ): Effect.Effect<A, NoteIndexError> =>
+    Effect.tryPromise({
+      try: run,
+      catch: (cause) =>
+        cause instanceof NoteIndexError
+          ? cause
+          : new NoteIndexError({ operation, path, cause }),
+    });
+
+  const list = (
+    options: ListOptions = {},
+  ): Effect.Effect<ReadonlyArray<NoteSummary>, NoteIndexError> =>
+    attempt("list", undefined, async () => {
+      const where: string[] = [];
+      const params: SqlValue[] = [];
+
+      if (options.includeArchived !== true) where.push("notes.archived = 0");
+      if (options.folder !== undefined) {
+        where.push("notes.folder = ?");
+        params.push(normalizeFolder(options.folder));
+      }
+
+      const rows = await driver.select<SummaryRow>({
+        sql: LIST_NOTES(where),
+        params,
+      });
+      return rows.map(toSummary);
+    });
+
+  const get = (id: string): Effect.Effect<IndexedNote | null, NoteIndexError> =>
+    attempt("get", undefined, async () => {
+      const rows = await driver.select<NoteRow>({
+        sql: GET_NOTE,
+        params: [id],
+      });
+      const row = rows[0];
+      return row === undefined ? null : toIndexedNote(row);
+    });
+
+  const save = (
+    note: Note,
+    folder: string,
+  ): Effect.Effect<IndexedNote, NoteIndexError> =>
+    attempt("save", undefined, async () => {
+      if (note.id.length === 0) {
+        throw new Error("A note must have an id before it can be saved");
+      }
+      const targetFolder = normalizeFolder(folder);
+
+      const existing = await driver.select<{ path: string }>({
+        sql: GET_NOTE_PATH,
+        params: [note.id],
+      });
+      const basename =
+        existing[0] === undefined ? `${note.id}${MARKDOWN_SUFFIX}` : basenameOf(existing[0].path);
+      const path = joinRelative(targetFolder, basename);
+
+      // File first, index second. A failure here leaves the file on disk and
+      // the index behind, which startup rebuild repairs.
+      if (targetFolder.length > 0) {
+        await storage.makeDirectory(absolutePath(root, targetFolder));
+      }
+      await storage.writeTextFile(absolutePath(root, path), serialize(note));
+
+      const previousPath = existing[0]?.path;
+      if (previousPath !== undefined && previousPath !== path) {
+        await storage.remove(absolutePath(root, previousPath));
+      }
+
+      const info = await storage.stat(absolutePath(root, path));
+      if (info === null) {
+        throw new Error(`Note file disappeared after writing: ${path}`);
+      }
+
+      await driver.transaction(noteStatements(note, targetFolder, path, info));
+      return { note, folder: targetFolder };
+    });
+
+  const search = (
+    query: string,
+    limit: number = DEFAULT_SEARCH_LIMIT,
+  ): Effect.Effect<ReadonlyArray<NoteSummary>, NoteIndexError> =>
+    attempt("search", undefined, async () => {
+      const match = ftsQuery(query);
+      if (match === null) return [];
+      const size =
+        Number.isFinite(limit) && limit > 0
+          ? Math.trunc(limit)
+          : DEFAULT_SEARCH_LIMIT;
+      const rows = await driver.select<SummaryRow>({
+        sql: SEARCH_NOTES,
+        params: [match, size],
+      });
+      return rows.map(toSummary);
+    });
+
+  const rebuild = (): Effect.Effect<void, NoteIndexError> =>
+    attempt("rebuild", undefined, async () => {
+      await resetSchema(driver);
+      await replaceAll(driver, root, storage);
+    });
+
+  return { list, get, save, search, rebuild };
+};
+
+const resetSchema = async (driver: SqlDriver): Promise<void> => {
+  const statements: SqlStatement[] = [
+    ...DROP_SCHEMA.map((sql) => ({ sql })),
+    ...CREATE_SCHEMA.map((sql) => ({ sql })),
+  ];
+  await driver.transaction(statements);
+};
+
+const isHealthy = async (driver: SqlDriver): Promise<boolean> => {
+  const integrity = await driver.select<Record<string, unknown>>({
+    sql: INTEGRITY_CHECK,
+  });
+  const verdict = integrity[0] === undefined ? undefined : Object.values(integrity[0])[0];
+  if (verdict !== "ok") return false;
+
+  const version = await driver.select<{ user_version: number }>({
+    sql: SCHEMA_VERSION_QUERY,
+  });
+  if (Number(version[0]?.user_version) !== SCHEMA_VERSION) return false;
+
+  const tables = await driver.select<{ total: number }>({ sql: TABLE_COUNT });
+  return Number(tables[0]?.total) === 2;
+};
+
+/**
+ * True when every indexed note still matches the file on disk and every
+ * indexable file is present in the index. Cheap checks use the stat
+ * fingerprint; only files the index has never seen are parsed.
+ */
+const isCurrent = async (
+  driver: SqlDriver,
+  root: string,
+  storage: NoteStorage,
+): Promise<boolean> => {
+  const files = await collectNotes(root, storage);
+  const rows = await driver.select<FingerprintRow>({
+    sql: SELECT_FINGERPRINTS,
+  });
+
+  const filesByPath = new Map(files.map((file) => [file.path, file]));
+  for (const row of rows) {
+    if (!filesByPath.has(row.path)) return false;
+  }
+
+  const rowsByPath = new Map(rows.map((row) => [row.path, row]));
+  for (const file of files) {
+    const row = rowsByPath.get(file.path);
+    if (row !== undefined) {
+      if (
+        Number(row.source_mtime) !== file.mtime ||
+        Number(row.source_size) !== file.size
+      ) {
+        return false;
+      }
+      continue;
+    }
+
+    // A Markdown file the index has never seen. Stray, unindexable files are
+    // ignored; a real note means the index is stale.
+    const note = await readNote(storage, absolutePath(root, file.path));
+    if (note !== null) return false;
+  }
+
+  return true;
+};
+
+const replaceAll = async (
+  driver: SqlDriver,
+  root: string,
+  storage: NoteStorage,
+): Promise<void> => {
+  const files = await collectNotes(root, storage);
+  const statements: SqlStatement[] = [
+    { sql: DELETE_ALL_NOTES },
+    { sql: DELETE_ALL_FTS },
+  ];
+
+  for (const file of files) {
+    const note = await readNote(storage, absolutePath(root, file.path));
+    if (note === null) continue;
+    statements.push(
+      ...noteStatements(note, folderOf(file.path), file.path, file),
+    );
+  }
+
+  await driver.transaction(statements);
+};
+
+const noteStatements = (
+  note: Note,
+  folder: string,
+  path: string,
+  info: NoteStorageStat,
+): SqlStatement[] => [
+  {
+    sql: UPSERT_NOTE,
+    params: [
+      note.id,
+      note.title,
+      note.created,
+      note.modified,
+      note.pinned ? 1 : 0,
+      note.archived ? 1 : 0,
+      folder,
+      path,
+      note.body,
+      Math.trunc(info.mtime),
+      info.size,
+    ],
+  },
+  { sql: DELETE_FTS, params: [note.id] },
+  { sql: INSERT_FTS, params: [note.id, note.title, note.body] },
+];
+
+const collectNotes = async (
+  root: string,
+  storage: NoteStorage,
+): Promise<ReadonlyArray<WalkedNote>> => {
+  const notes: WalkedNote[] = [];
+
+  const walk = async (folder: string): Promise<void> => {
+    const entries = [...(await storage.readDirectory(absolutePath(root, folder)))];
+    entries.sort((left, right) => left.name.localeCompare(right.name));
+
+    for (const entry of entries) {
+      if (entry.isDirectory) {
+        if (entry.name.startsWith(".")) continue;
+        if (folder.length === 0 && entry.name === ATTACHMENTS_DIRECTORY) {
+          continue;
+        }
+        await walk(joinRelative(folder, entry.name));
+        continue;
+      }
+
+      if (!entry.isFile || !entry.name.endsWith(MARKDOWN_SUFFIX)) continue;
+      const path = joinRelative(folder, entry.name);
+      const info = await storage.stat(absolutePath(root, path));
+      if (info === null) continue;
+      notes.push({ path, mtime: Math.trunc(info.mtime), size: info.size });
+    }
+  };
+
+  await walk("");
+  notes.sort((left, right) => left.path.localeCompare(right.path));
+  return notes;
+};
+
+const readNote = async (
+  storage: NoteStorage,
+  path: string,
+): Promise<Note | null> => {
+  const note = parse(await storage.readTextFile(path));
+  return note.id.length === 0 ? null : note;
+};
+
+const stripTrailingSlash = (path: string): string => path.replace(/\/+$/, "");
+
+const absolutePath = (root: string, relativePath: string): string =>
+  relativePath.length === 0 ? root : `${root}/${relativePath}`;
+
+const joinRelative = (...segments: ReadonlyArray<string>): string =>
+  segments.filter((segment) => segment.length > 0).join("/");
+
+const folderOf = (path: string): string => {
+  const slash = path.lastIndexOf("/");
+  return slash < 0 ? "" : path.slice(0, slash);
+};
+
+const basenameOf = (path: string): string => {
+  const slash = path.lastIndexOf("/");
+  return slash < 0 ? path : path.slice(slash + 1);
+};
+
+/**
+ * Folders are vault-relative POSIX paths. Absolute paths and `..` escapes are
+ * rejected; `""` is the vault root.
+ */
+const normalizeFolder = (folder: string): string => {
+  const trimmed = folder.trim();
+  if (trimmed.length === 0) return "";
+  if (trimmed.startsWith("/") || trimmed.includes("\\")) {
+    throw new Error(`Folder must be a vault-relative POSIX path: ${folder}`);
+  }
+  const segments = trimmed.split("/").filter((segment) => segment !== "" && segment !== ".");
+  if (segments.includes("..")) {
+    throw new Error(`Folder must stay inside the vault: ${folder}`);
+  }
+  return segments.join("/");
+};
