@@ -275,7 +275,9 @@ jobs:
           gh issue comment "$N" --body "$(printf 'Implementation is pushed to `%s`, but GitHub failed to open the draft PR. **The branch is safe — do not re-run the agent.**\n\nOpen it with:\n\n```\ngh pr create --draft --base main --head %s --title "%s"\n```\n\nFailed step log: %s\n' "$BRANCH" "$BRANCH" "$TITLE" "$RUN_URL")" || true
 
       - name: Report failure
-        if: failure()
+        # A PR-API failure is handled by "Report PR outcome"; it must not add
+        # agent:blocked when the branch is already pushed.
+        if: failure() && !(steps.push.outcome == 'success' && steps.pr.outcome == 'failure')
         env:
           GH_TOKEN: ${{ github.token }}
           N: ${{ github.event.issue.number || inputs.issue_number }}
