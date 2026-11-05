@@ -27,6 +27,11 @@ on:
         description: "Issue number to implement"
         required: true
         type: number
+      model:
+        description: "Model to use (default: anonymous free tier)"
+        required: false
+        default: "opencode/deepseek-v4.1-flash-free"
+        type: string
 
 permissions:
   contents: write
@@ -160,8 +165,8 @@ jobs:
           mkdir -p "$HOME/.config/opencode"
           printf '{ "session": { "permissions": "autoaccept" } }\n' > "$HOME/.config/opencode/cli.json"
           # The agent gets a scrubbed environment: no GITHUB_TOKEN, no GH_TOKEN.
-          env -i HOME="$HOME" PATH="$PATH" TERM=dumb CI=true bash -lc \
-            'cd "$1" && timeout 38m opencode run --model opencode/deepseek-v4.1-flash-free "$(cat /tmp/factory-prompt.txt)"' \
+          env -i HOME="$HOME" PATH="$PATH" TERM=dumb CI=true MODEL="${{ inputs.model || 'opencode/deepseek-v4.1-flash-free' }}" bash -lc \
+            'cd "$1" && timeout 38m opencode run --model "$MODEL" "$(cat /tmp/factory-prompt.txt)"' \
             _ "$GITHUB_WORKSPACE"
 
       - name: Commit any uncommitted agent changes
