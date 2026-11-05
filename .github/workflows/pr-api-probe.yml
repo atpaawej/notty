@@ -1,0 +1,121 @@
+name: PR API probe
+
+# Manual diagnostic. Runs the factory's exact PR-creation path (REST) and the
+# old one (GraphQL via `gh pr create`) repeatedly with the workflow token,
+# then closes/deletes everything it created. Use it when a factory run reports
+# a PR failure, to tell a GitHub-side fault from a factory bug.
+
+on:
+  workflow_dispatch:
+    inputs:
+      rest_attempts:
+        description: "REST attempts"
+        required: false
+        default: "5"
+      gql_attempts:
+        description: "GraphQL attempts"
+        required: false
+        default: "3"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  # Same as the factory, so the probe reproduces its environment.
+  GH_REPO: ${{ github.repository }}
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Probe PR creation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN: ${{ github.run_id }}
+          REST_ATTEMPTS: ${{ inputs.rest_attempts }}
+          GQL_ATTEMPTS: ${{ inputs.gql_attempts }}
+        run: |
+          set -uo pipefail
+
+          echo "gh: $(gh --version | head -1)"
+          echo "token identity: $(gh api user --jq .login 2>&1)"
+          echo "workflow permission setting: $(gh api "repos/${REPO}/actions/permissions/workflow" 2>&1 | head -c 300)"
+
+          git config user.name "pr-api-probe[bot]"
+          git config user.email "pr-api-probe[bot]@users.noreply.github.com"
+
+          make_branch() {
+            local branch="$1"
+            git checkout -q -B "$branch" origin/main
+            echo "${RUN} ${branch} $(date -u +%FT%TZ)" > ".pr-api-probe-${RUN}-$(echo "$branch" | tr '/ ' '--')"
+            git add -A
+            # [skip ci]: each probe PR would otherwise start a full CI run.
+            git commit -q -m "test: PR API probe ${branch} [skip ci]"
+            git push -q origin "HEAD:refs/heads/${branch}"
+          }
+
+          close_pr() {
+            local num="$1" branch="$2"
+            gh api --method PATCH "repos/${REPO}/pulls/${num}" -f state=closed >/dev/null 2>&1 || true
+            git push -q origin --delete "$branch" >/dev/null 2>&1 || true
+          }
+
+          # REST: exactly the factory's current path.
+          rest_fail=0
+          for i in $(seq 1 "$REST_ATTEMPTS"); do
+            br="test/pr-api-rest-${RUN}-${i}"
+            make_branch "$br"
+            out=$(gh api --method POST "repos/${REPO}/pulls" \
+              -f title="PR API probe REST ${i}" \
+              -f head="$br" \
+              -f base=main \
+              -f body="Automated probe, safe to close." \
+              -F draft=true 2>&1)
+            rc=$?
+            if [ "$rc" -eq 0 ]; then
+              num=$(jq -r '.number' <<<"$out")
+              echo "REST ${i}: PASS #${num}"
+              close_pr "$num" "$br"
+            else
+              rest_fail=$((rest_fail + 1))
+              echo "REST ${i}: FAIL rc=${rc}: $(tr '\n' ' ' <<<"$out" | cut -c1-500)"
+              git push -q origin --delete "$br" >/dev/null 2>&1 || true
+            fi
+            git checkout -q main
+          done
+
+          # GraphQL: what `gh pr create` did in run 42059874269.
+          gql_fail=0
+          for i in $(seq 1 "$GQL_ATTEMPTS"); do
+            br="test/pr-api-gql-${RUN}-${i}"
+            make_branch "$br"
+            out=$(gh pr create --draft --base main --head "$br" \
+              --title "PR API probe GraphQL ${i}" \
+              --body "Automated probe, safe to close." 2>&1)
+            rc=$?
+            if [ "$rc" -eq 0 ]; then
+              num="${out##*/}"
+              echo "GraphQL ${i}: PASS #${num} ${out}"
+              close_pr "$num" "$br"
+            else
+              gql_fail=$((gql_fail + 1))
+              echo "GraphQL ${i}: FAIL rc=${rc}: $(tr '\n' ' ' <<<"$out" | cut -c1-500)"
+              git push -q origin --delete "$br" >/dev/null 2>&1 || true
+            fi
+            git checkout -q main
+          done
+
+          {
+            echo "## PR API probe"
+            echo ""
+            echo "- REST failures: **${rest_fail}/${REST_ATTEMPTS}**"
+            echo "- GraphQL failures: **${gql_fail}/${GQL_ATTEMPTS}**"
+          } >>"$GITHUB_STEP_SUMMARY"
+
+          echo "SUMMARY rest=${rest_fail}/${REST_ATTEMPTS} graphql=${gql_fail}/${GQL_ATTEMPTS}"
+          [ "$rest_fail" -eq 0 ] && [ "$gql_fail" -eq 0 ]
