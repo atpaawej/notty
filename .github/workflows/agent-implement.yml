@@ -126,7 +126,7 @@ jobs:
       - name: Install opencode (pinned)
         if: steps.preflight.outputs.accepted == 'true'
         run: |
-          curl -fsSL https://opencode.ai/install | bash -s -- --version 2.2.5 --no-modify-path
+          curl -fsSL https://opencode.ai/v2/install | bash -s -- --version 2.2.5 --no-modify-path
           opencode --version
 
       - name: Build the agent prompt from the issue
