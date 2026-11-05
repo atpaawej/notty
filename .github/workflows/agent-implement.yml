@@ -37,6 +37,12 @@ concurrency:
   group: agent-implement-issue-${{ github.event.issue.number || inputs.issue_number }}
   cancel-in-progress: false
 
+# gh has no repo context outside a git clone — point it at the repo for
+# every step, including preflight (which runs before checkout) and the
+# failure reporter (which runs when steps did).
+env:
+  GH_REPO: ${{ github.repository }}
+
 jobs:
   implement:
     runs-on: ubuntu-latest
@@ -206,8 +212,8 @@ jobs:
           echo "url=$PR_URL" >>"$GITHUB_OUTPUT"
           gh issue comment "$N" --body "Factory run opened draft PR: ${PR_URL}"
 
-      - name: Mark blocked on failure
-        if: steps.preflight.outputs.accepted == 'true' && failure()
+      - name: Report failure
+        if: failure()
         env:
           GH_TOKEN: ${{ github.token }}
           N: ${{ github.event.issue.number || inputs.issue_number }}
@@ -215,11 +221,11 @@ jobs:
         run: |
           DETAIL=""
           [ -n "$REASON" ] && DETAIL=$(printf '\n\n**Why:** %s' "$REASON")
-          gh issue edit "$N" --add-label agent:blocked || true
+          gh issue edit "$N" --add-label agent:blocked --remove-label agent:implement || true
           gh issue comment "$N" --body "Factory run failed — see ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}. Fix the cause, then re-add \`agent:implement\` to retry.${DETAIL}"
 
       - name: Clear the in-progress lock
-        if: steps.preflight.outputs.accepted == 'true' && always()
+        if: always()
         env:
           GH_TOKEN: ${{ github.token }}
           N: ${{ github.event.issue.number || inputs.issue_number }}

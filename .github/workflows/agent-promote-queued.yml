@@ -25,6 +25,9 @@ concurrency:
   group: agent-promote-queued
   cancel-in-progress: false
 
+env:
+  GH_REPO: ${{ github.repository }}
+
 jobs:
   promote:
     if: github.event.issue.state_reason == 'completed'
