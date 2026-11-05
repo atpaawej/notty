@@ -51,6 +51,10 @@ env:
 
 jobs:
   implement:
+    # `issues: labeled` fires for every label. Only `agent:implement` is the
+    # trigger; without this, applying `ready-for-agent` or `agent:queued`
+    # starts a run immediately.
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'agent:implement'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
