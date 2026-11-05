@@ -17,6 +17,10 @@
     "fs:allow-lstat",
     "fs:allow-mkdir",
     "fs:allow-read-dir",
-    "fs:allow-remove"
+    "fs:allow-read-text-file",
+    "fs:allow-remove",
+    "fs:allow-write-text-file",
+    "sql:default",
+    "sql:allow-execute"
   ]
 }
