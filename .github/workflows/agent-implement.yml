@@ -13,8 +13,9 @@
 # - `agent:in-progress` is the lock; `agent:blocked` means it needs you.
 # - An issue with open blockers (native `blocked_by`) is refused, not
 #   attempted.
-# - The model is anonymous DeepSeek V4.1 Flash Free via opencode — no
-#   secrets, but also no SLA and limited context. CI is the leash.
+# - The model is free on this account (OPENCODE_API_KEY authenticates; 0
+#   credits, free-tier models only). Free models are limited-time and the
+#   pool can exhaust; CI is the leash, no SLA.
 
 name: Agent · Implement
 
@@ -158,14 +159,17 @@ jobs:
           } > /tmp/factory-prompt.txt
           wc -c /tmp/factory-prompt.txt
 
-      - name: Run the agent (token-free environment)
+      - name: Run the agent (token-free, account-authenticated)
         if: steps.preflight.outputs.accepted == 'true'
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         run: |
           set -euo pipefail
           mkdir -p "$HOME/.config/opencode"
           printf '{ "session": { "permissions": "autoaccept" } }\n' > "$HOME/.config/opencode/cli.json"
-          # The agent gets a scrubbed environment: no GITHUB_TOKEN, no GH_TOKEN.
-          env -i HOME="$HOME" PATH="$PATH" TERM=dumb CI=true MODEL="${{ inputs.model || 'opencode/deepseek-v4.1-flash-free' }}" bash -lc \
+          # The agent gets a minimal environment: no GITHUB_TOKEN, no GH_TOKEN.
+          # OPENCODE_API_KEY authenticates only the free models on this account.
+          env -i HOME="$HOME" PATH="$PATH" TERM=dumb CI=true OPENCODE_API_KEY="$OPENCODE_API_KEY" MODEL="${{ inputs.model || 'opencode/deepseek-v4.1-flash-free' }}" bash -lc \
             'cd "$1" && timeout 38m opencode run --model "$MODEL" "$(cat /tmp/factory-prompt.txt)"' \
             _ "$GITHUB_WORKSPACE"
 
