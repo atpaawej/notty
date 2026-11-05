@@ -233,7 +233,9 @@ export function createWorkspace(
         );
 
   const createNote = async (): Promise<void> => {
-    if (draft !== null) await flush();
+    // Queue the previous draft's save without waiting for disk: capture must
+    // not pause behind an unrelated write.
+    if (draft !== null) void flush();
 
     const createdAt = now().toISOString();
     const note: Note = {
