@@ -102,6 +102,16 @@ for (const adapter of adapters) {
       expect(await fileExists(join(vaultRoot, "first.md"))).toBe(true);
     });
 
+    it("round-trips title ownership through save and get", async () => {
+      const note = makeNote("locked", { titleLocked: true });
+
+      await withIndex(layer(), (index) => index.save(note, ""));
+      const found = await withIndex(layer(), (index) => index.get("locked"));
+
+      expect(found?.note.titleLocked).toBe(true);
+      expect(found?.note).toEqual(note);
+    });
+
     it("returns null for a missing id rather than failing", async () => {
       await expect(
         withIndex(layer(), (index) => index.get("nope")),
