@@ -99,6 +99,14 @@ describe("serialize", () => {
     expect(serialize(note())).toBe(canonicalFile("Milk, eggs, the good bread."));
   });
 
+  it("stores title ownership only once the title has been edited", () => {
+    const locked = note({ titleLocked: true, body: "Body" });
+
+    expect(serialize(locked)).toContain("titleLocked: true");
+    expect(parse(serialize(locked)).titleLocked).toBe(true);
+    expect(parse(serialize(note())).titleLocked).toBeUndefined();
+  });
+
   it("writes an empty body for an empty document", () => {
     const output = serialize(note({ body: "" }));
 

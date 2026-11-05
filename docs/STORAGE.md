@@ -27,6 +27,7 @@ created: 2026-11-05T09:14:00Z
 modified: 2026-11-05T09:31:12Z
 pinned: false
 archived: false
+titleLocked: true
 ---
 
 Milk, eggs, the good bread.
@@ -38,6 +39,7 @@ Rules:
 
 - `id` is stable for the life of the note; renaming or moving never changes it.
 - `title` is stored, not derived at read time. Auto-title writes it only while the user has not edited it.
+- `titleLocked: true` records that the user owns the title. It is omitted until then, so older notes keep their exact frontmatter.
 - `created` and `modified` are ISO 8601 UTC.
 - `pinned` and `archived` are booleans. Folder membership is the file's directory, not a frontmatter field.
 - Image references are relative paths into `attachments/`. Base64 payloads are forbidden.

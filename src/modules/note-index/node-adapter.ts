@@ -5,15 +5,6 @@
  * against `:memory:`, so both exercise identical SQL. Tests point the root at
  * a `mkdtemp` directory and never touch the home directory.
  */
-import {
-  mkdir,
-  readdir,
-  readFile,
-  rm,
-  stat,
-  writeFile,
-} from "node:fs/promises";
-import { DatabaseSync } from "node:sqlite";
 import { Effect, Layer } from "effect";
 import type { SqlDriver, SqlStatement } from "./driver";
 import { openNoteIndex } from "./note-index";
@@ -30,15 +21,27 @@ export interface NoteIndexNodeOptions {
   readonly database?: string;
 }
 
+/**
+ * Node builtins are imported lazily: this file is re-exported from the
+ * module's interface, which the WebView bundle also imports. Nothing here
+ * executes in that bundle, and no `node:` specifier is resolved at its load
+ * time.
+ */
 const nodeStorage: NoteStorage = {
-  readTextFile: (path) => readFile(path, "utf8"),
+  readTextFile: async (path) => {
+    const { readFile } = await import("node:fs/promises");
+    return readFile(path, "utf8");
+  },
   writeTextFile: async (path, contents) => {
+    const { writeFile } = await import("node:fs/promises");
     await writeFile(path, contents, "utf8");
   },
   makeDirectory: async (path) => {
+    const { mkdir } = await import("node:fs/promises");
     await mkdir(path, { recursive: true });
   },
   readDirectory: async (path) => {
+    const { readdir } = await import("node:fs/promises");
     const entries = await readdir(path, { withFileTypes: true });
     return entries.map((entry) => ({
       name: entry.name,
@@ -47,6 +50,7 @@ const nodeStorage: NoteStorage = {
     }));
   },
   stat: async (path) => {
+    const { stat } = await import("node:fs/promises");
     try {
       const info = await stat(path);
       return { mtime: Math.trunc(info.mtimeMs), size: info.size };
@@ -56,11 +60,13 @@ const nodeStorage: NoteStorage = {
     }
   },
   remove: async (path) => {
+    const { rm } = await import("node:fs/promises");
     await rm(path, { force: true });
   },
 };
 
 const openNodeDriver = async (database: string): Promise<SqlDriver> => {
+  const { DatabaseSync } = await import("node:sqlite");
   const db = new DatabaseSync(database);
 
   const execute = (statement: SqlStatement): void => {

@@ -21,6 +21,7 @@
     "fs:allow-remove",
     "fs:allow-write-text-file",
     "sql:default",
-    "sql:allow-execute"
+    "sql:allow-execute",
+    "core:window:allow-close"
   ]
 }

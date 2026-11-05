@@ -1,8 +1,10 @@
 /**
  * editor — owns TipTap, wrapped.
  *
- * Public interface lands with the editor tickets: a NoteEditor React
- * component that takes a Markdown body and a note id and emits Markdown.
- * No TipTap or ProseMirror types may escape this folder.
+ * Public interface: a `NoteEditor` React component that takes Markdown and
+ * emits Markdown, plus `normalizeMarkdown` for the pure parse/serialize
+ * round-trip. No TipTap or ProseMirror type escapes this folder.
  */
-export {};
+export { NoteEditor } from "./NoteEditor";
+export type { NoteEditorProps } from "./NoteEditor";
+export { normalizeMarkdown } from "./markdown";

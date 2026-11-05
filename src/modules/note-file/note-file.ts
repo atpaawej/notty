@@ -21,6 +21,11 @@ export interface Note {
   readonly modified: string;
   readonly pinned: boolean;
   readonly archived: boolean;
+  /**
+   * True once the user has edited the title. Auto-titling stops at that point.
+   * Absent on notes whose title is still derived from the body.
+   */
+  readonly titleLocked?: boolean;
   /** Markdown body. An empty document is the empty string. */
   readonly body: string;
   /**
@@ -44,6 +49,7 @@ const KNOWN_KEYS = [
   "modified",
   "pinned",
   "archived",
+  "titleLocked",
 ] as const;
 
 type KnownKey = (typeof KNOWN_KEYS)[number];
@@ -92,6 +98,7 @@ export const parse = (fileContents: string): Note => {
     modified: asString(values.get("modified")),
     pinned: asBoolean(values.get("pinned")),
     archived: asBoolean(values.get("archived")),
+    ...(asBoolean(values.get("titleLocked")) ? { titleLocked: true } : {}),
     body: split.body,
     ...(Object.keys(extra).length > 0 ? { extra } : {}),
   };
@@ -112,6 +119,7 @@ export const serialize = (note: Note): string => {
     modified: formatString(note.modified),
     pinned: note.pinned ? "true" : "false",
     archived: note.archived ? "true" : "false",
+    titleLocked: note.titleLocked === true ? "true" : "false",
   };
 
   const rawEntries = (note as NoteWithRawEntries)[RAW_ENTRIES] ?? [];
@@ -123,6 +131,12 @@ export const serialize = (note: Note): string => {
   // values this build owns. Unknown entries are copied line for line.
   for (const entry of rawEntries) {
     if (isKnownKey(entry.key)) {
+      // `titleLocked` is only written while it is true; a false value is the
+      // absent default for every note that has never had its title edited.
+      if (entry.key === "titleLocked" && note.titleLocked !== true) {
+        seen.add(entry.key);
+        continue;
+      }
       lines.push(`${entry.key}: ${values[entry.key]}`);
       seen.add(entry.key);
     } else if (hasOwn(extra, entry.key)) {
@@ -132,10 +146,10 @@ export const serialize = (note: Note): string => {
   }
 
   for (const key of KNOWN_KEYS) {
-    if (!seen.has(key)) {
-      lines.push(`${key}: ${values[key]}`);
-      seen.add(key);
-    }
+    if (seen.has(key)) continue;
+    if (key === "titleLocked" && note.titleLocked !== true) continue;
+    lines.push(`${key}: ${values[key]}`);
+    seen.add(key);
   }
 
   for (const [key, value] of Object.entries(extra)) {
@@ -553,5 +567,18 @@ const formatDate = (value: string | Date): string => {
 
 const firstWords = (body: string, maxWords: number): string => {
   if (maxWords <= 0) return "";
-  return body.trim().split(/\s+/).filter(Boolean).slice(0, maxWords).join(" ");
+  const words: string[] = [];
+  let index = 0;
+
+  // Scan rather than split: auto-title runs on every keystroke, including on
+  // very long notes, so the work must stay proportional to the words kept.
+  while (index < body.length && words.length < maxWords) {
+    while (index < body.length && /\s/.test(body[index])) index += 1;
+    if (index >= body.length) break;
+    const start = index;
+    while (index < body.length && !/\s/.test(body[index])) index += 1;
+    words.push(body.slice(start, index));
+  }
+
+  return words.join(" ");
 };

@@ -114,6 +114,17 @@ export const noteIndexTauriLayer: Layer.Layer<
   Effect.acquireRelease(
     Effect.gen(function* () {
       const vault = yield* Vault;
+
+      // First launch: the vault (and its attachments/.notty/.trash folders)
+      // must exist before the index can walk it.
+      yield* vault
+        .ensure()
+        .pipe(
+          Effect.mapError(
+            (cause) => new NoteIndexError({ operation: "ensure", cause }),
+          ),
+        );
+
       const paths = yield* vault
         .location()
         .pipe(

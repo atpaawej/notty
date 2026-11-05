@@ -6,7 +6,7 @@
  */
 import type { IndexedNote, NoteSummary } from "./service";
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export const CREATE_SCHEMA: ReadonlyArray<string> = [
   `CREATE TABLE IF NOT EXISTS notes (
@@ -16,6 +16,7 @@ export const CREATE_SCHEMA: ReadonlyArray<string> = [
     modified TEXT NOT NULL,
     pinned INTEGER NOT NULL,
     archived INTEGER NOT NULL,
+    title_locked INTEGER NOT NULL,
     folder TEXT NOT NULL,
     path TEXT NOT NULL,
     body TEXT NOT NULL,
@@ -52,15 +53,16 @@ export const GET_NOTE = `SELECT notes.* FROM notes WHERE notes.id = ?`;
 export const GET_NOTE_PATH = "SELECT path FROM notes WHERE id = ?";
 
 export const UPSERT_NOTE = `INSERT INTO notes (
-  id, title, created, modified, pinned, archived, folder, path, body,
+  id, title, created, modified, pinned, archived, title_locked, folder, path, body,
   source_mtime, source_size
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
   title = excluded.title,
   created = excluded.created,
   modified = excluded.modified,
   pinned = excluded.pinned,
   archived = excluded.archived,
+  title_locked = excluded.title_locked,
   folder = excluded.folder,
   path = excluded.path,
   body = excluded.body,
@@ -94,6 +96,7 @@ export interface NoteRow {
   readonly modified: string;
   readonly pinned: number;
   readonly archived: number;
+  readonly title_locked: number;
   readonly folder: string;
   readonly path: string;
   readonly body: string;
@@ -135,6 +138,7 @@ export const toIndexedNote = (row: NoteRow): IndexedNote => ({
     modified: row.modified,
     pinned: Number(row.pinned) !== 0,
     archived: Number(row.archived) !== 0,
+    ...(Number(row.title_locked) !== 0 ? { titleLocked: true } : {}),
     body: row.body,
   },
   folder: row.folder,

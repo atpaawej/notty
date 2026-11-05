@@ -333,6 +333,7 @@ const noteStatements = (
       note.modified,
       note.pinned ? 1 : 0,
       note.archived ? 1 : 0,
+      note.titleLocked === true ? 1 : 0,
       folder,
       path,
       note.body,
