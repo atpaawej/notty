@@ -17,6 +17,10 @@ npm run tauri build      # production build
 
 CI runs the frontend checks and `cargo fmt` / `clippy` / `check` on every PR.
 
+## Factory
+
+Issues labelled `agent:implement` are implemented by an AFK agent and arrive as draft PRs; you review and merge. See `docs/agents/factory.md`.
+
 ## Licence
 
 MIT
