@@ -1,7 +1,16 @@
 /**
- * workspace — owns the three-column shell and its commands.
+ * workspace — owns the three-column shell, selection and auto-save.
  *
- * Public interface lands with the capture and organization tickets: the
- * selection state, keyboard commands, and auto-save scheduling.
+ * Public interface: the `Workspace` React shell, the `NoteStore` persistence
+ * seam it needs, and the framework-free controller behind it.
  */
-export {};
+export { Workspace } from "./Workspace";
+export type { WorkspaceProps } from "./Workspace";
+export { createWorkspace } from "./workspace";
+export type {
+  EditorNote,
+  NoteStore,
+  WorkspaceController,
+  WorkspaceOptions,
+  WorkspaceState,
+} from "./workspace";

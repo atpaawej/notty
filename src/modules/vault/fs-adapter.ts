@@ -7,14 +7,17 @@
  * Node builtins. If this module ever reaches the browser bundle, the build
  * fails loudly — keep it that way.
  */
-import { access, lstat, mkdir, readdir, rm } from "node:fs/promises";
-import { homedir } from "node:os";
 import { Effect, Layer } from "effect";
 import { resolveVaultPaths, Vault, type VaultFileSystem } from "./service";
 import { makeVault } from "./vault";
 
+/**
+ * Node builtins load on first use, never when the WebView imports this
+ * module's interface. The browser never calls these paths.
+ */
 const nodeVaultFileSystem: VaultFileSystem = {
   exists: async (path) => {
+    const { access } = await import("node:fs/promises");
     try {
       await access(path);
       return true;
@@ -23,9 +26,11 @@ const nodeVaultFileSystem: VaultFileSystem = {
     }
   },
   makeDirectory: async (path) => {
+    const { mkdir } = await import("node:fs/promises");
     await mkdir(path, { recursive: true });
   },
   readDirectory: async (path) => {
+    const { readdir } = await import("node:fs/promises");
     const entries = await readdir(path, { withFileTypes: true });
     return entries.map((entry) => ({
       name: entry.name,
@@ -34,6 +39,7 @@ const nodeVaultFileSystem: VaultFileSystem = {
     }));
   },
   stat: async (path) => {
+    const { lstat } = await import("node:fs/promises");
     const info = await lstat(path);
     return {
       isFile: info.isFile(),
@@ -42,6 +48,7 @@ const nodeVaultFileSystem: VaultFileSystem = {
     };
   },
   remove: async (path, options) => {
+    const { rm } = await import("node:fs/promises");
     await rm(path, { recursive: options?.recursive ?? false });
   },
 };
@@ -50,9 +57,10 @@ export const vaultProductionLayer = Layer.succeed(
   Vault,
   makeVault(
     () =>
-      Effect.sync(() =>
-        resolveVaultPaths(process.env.XDG_DATA_HOME, homedir()),
-      ),
+      Effect.promise(async () => {
+        const { homedir } = await import("node:os");
+        return resolveVaultPaths(process.env.XDG_DATA_HOME, homedir());
+      }),
     nodeVaultFileSystem,
   ),
 );

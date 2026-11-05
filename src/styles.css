@@ -195,8 +195,16 @@ body {
   border-radius: 999px;
   background: var(--accent);
   color: #ffffff;
-  cursor: default;
+  cursor: pointer;
   transition: background-color 120ms ease;
+}
+
+.compose-button:hover {
+  background: var(--accent-hover);
+}
+
+.compose-button:active {
+  background: var(--accent-pressed);
 }
 
 .compose-button svg {
@@ -204,8 +212,50 @@ body {
   height: 15px;
 }
 
-.compose-button:disabled {
+.note-list-items {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.note-list-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+
+.note-list-item:hover {
   background: var(--selection);
+}
+
+.note-list-item.is-active {
+  background: var(--accent-tint);
+}
+
+.note-list-item-title {
+  font-weight: 600;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-list-item-date {
+  font-size: 11px;
   color: var(--text-secondary);
 }
 
@@ -240,6 +290,91 @@ body {
   background: var(--surface-editor);
   display: flex;
   min-height: 0;
+  overflow: hidden;
+}
+
+.editor-note {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  padding: 28px clamp(24px, 7vw, 84px) 64px;
+}
+
+.note-title {
+  border: 0;
+  padding: 0;
+  margin: 0 0 14px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+
+.note-title:focus {
+  outline: none;
+}
+
+.note-editor {
+  flex: 1;
+  min-height: 0;
+}
+
+.note-editor-content {
+  min-height: 60vh;
+  outline: none;
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.note-editor-content:focus {
+  outline: none;
+}
+
+.note-editor-content > * {
+  margin: 0 0 0.75em;
+}
+
+.note-editor-content h1,
+.note-editor-content h2,
+.note-editor-content h3 {
+  letter-spacing: -0.015em;
+  line-height: 1.25;
+}
+
+.note-editor-content h1 {
+  font-size: 22px;
+}
+
+.note-editor-content h2 {
+  font-size: 18px;
+}
+
+.note-editor-content h3 {
+  font-size: 15px;
+}
+
+.note-editor-content ul,
+.note-editor-content ol {
+  padding-left: 1.35em;
+}
+
+.note-editor-content ul[data-type="taskList"] {
+  list-style: none;
+  padding-left: 0;
+}
+
+.note-editor-content p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  color: var(--text-secondary);
+  float: left;
+  height: 0;
+  pointer-events: none;
 }
 
 .editor-empty {
