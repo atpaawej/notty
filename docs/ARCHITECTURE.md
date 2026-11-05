@@ -44,11 +44,13 @@ This module has no I/O. It is pure and is the primary unit-test target.
 
 ### note-index
 
-Interface: list, get, save, search, rebuild. That is the whole surface.
+Interface: list, get, save, search, rebuild. There is no `remove` yet — the Trash ticket extends this surface.
 
-Hides: the SQLite schema, FTS5 tables and triggers, transaction boundaries, mirroring of frontmatter columns, rebuild-on-corruption.
+Ownership: `note-index` writes note files. `save` serialises with `note-file`, writes the file first, then upserts the index row. `vault` keeps creation, paths, attachments and the Trash sweep; `note-file` stays pure.
 
-Adapters: SQLite against the vault's index file (production), in-memory SQLite (tests). The rebuild path is exercised by the in-memory adapter.
+Hides: the SQLite schema, the standalone FTS5 table (synced explicitly in the same transaction as `notes`, no triggers), transaction boundaries, mirroring of frontmatter columns, rebuild-on-corruption.
+
+Adapters: SQLite against the vault's index file (production), in-memory SQLite (tests). Both run the same SQL through the same driver seam. The rebuild path is exercised by the in-memory adapter.
 
 ### editor
 
