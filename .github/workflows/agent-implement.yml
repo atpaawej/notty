@@ -227,11 +227,37 @@ jobs:
           TITLE: ${{ steps.preflight.outputs.title }}
         run: |
           set -euo pipefail
-          PR_URL=$(gh pr create --draft --base main --head "$BRANCH" \
-            --title "$TITLE" \
-            --body "$(printf 'Closes #%s\n\nImplemented by the notty factory (opencode + DeepSeek V4.1 Flash Free) from the issue text. **Read the diff before merging — a human merge is mandatory.**\n' "$N")")
+          BODY=$(printf 'Closes #%s\n\nImplemented by the notty factory (opencode + DeepSeek V4.1 Flash Free) from the issue text. **Read the diff before merging — a human merge is mandatory.**\n' "$N")
+
+          # gh pr create talks to the GraphQL API, which occasionally returns a
+          # generic "Something went wrong" even though the branch is fine (seen
+          # on run 42059874269). Reuse an existing PR, otherwise retry with
+          # backoff before giving up.
+          PR_URL=""
+          for attempt in 1 2 3 4 5; do
+            if ! PR_URL=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" \
+              --state open --json url --jq '.[0].url // empty'); then
+              PR_URL=""
+            fi
+            [ -n "$PR_URL" ] && break
+
+            if PR_URL=$(gh pr create --draft --base main --head "$BRANCH" \
+              --title "$TITLE" --body "$BODY"); then
+              break
+            fi
+
+            PR_URL=""
+            echo "::warning::gh pr create failed (attempt ${attempt}/5); retrying"
+            sleep $((attempt * 10))
+          done
+
+          if [ -z "$PR_URL" ]; then
+            echo "::error::Could not open the draft PR after 5 attempts"
+            exit 1
+          fi
+
           echo "url=$PR_URL" >>"$GITHUB_OUTPUT"
-          gh issue comment "$N" --body "Factory run opened draft PR: ${PR_URL}"
+          gh issue comment "$N" --body "Factory run opened draft PR: ${PR_URL}" || true
 
       - name: Report failure
         if: failure()
