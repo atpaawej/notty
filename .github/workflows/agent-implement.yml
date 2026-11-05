@@ -1,0 +1,226 @@
+# Notty factory — Implement (single issue)
+#
+# Trigger: an issue labelled `agent:implement` (human-applied; the "go" is
+# yours, `ready-for-agent` is only triage), or a manual workflow_dispatch
+# for the same issue. The run implements the issue on a deterministic
+# branch `agent/issue-<N>-<slug>`, pushes it, and opens a **draft** PR with
+# `Closes #N`. Nothing merges without a human.
+#
+# Trust boundaries (from the platform design):
+# - The agent never sees the GitHub token. The agent step runs with a
+#   scrubbed environment; every GitHub mutation happens in orchestrator
+#   steps, before or after the agent runs.
+# - `agent:in-progress` is the lock; `agent:blocked` means it needs you.
+# - An issue with open blockers (native `blocked_by`) is refused, not
+#   attempted.
+# - The model is anonymous DeepSeek V4.1 Flash Free via opencode — no
+#   secrets, but also no SLA and limited context. CI is the leash.
+
+name: Agent · Implement
+
+on:
+  issues:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "Issue number to implement"
+        required: true
+        type: number
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: agent-implement-issue-${{ github.event.issue.number || inputs.issue_number }}
+  cancel-in-progress: false
+
+jobs:
+  implement:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Resolve issue number and verify it is implementable
+        id: preflight
+        env:
+          GH_TOKEN: ${{ github.token }}
+          N: ${{ github.event.issue.number || inputs.issue_number }}
+        run: |
+          set -euo pipefail
+
+          if gh api "repos/${GITHUB_REPOSITORY}/issues/${N}" --jq 'has("pull_request")' | grep -qx true; then
+            echo "#$N is a pull request, not an issue — refusing."
+            echo "accepted=false" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          ISSUE=$(gh issue view "$N" --json state,labels,title)
+          STATE=$(jq -r '.state' <<<"$ISSUE")
+          if [ "$STATE" != "OPEN" ]; then
+            echo "Issue #$N is $STATE — nothing to do."
+            echo "accepted=false" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if jq -e '.labels[].name | select(. == "agent:in-progress")' <<<"$ISSUE" >/dev/null; then
+            echo "Issue #$N already has agent:in-progress — another run holds the lock."
+            echo "accepted=false" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          BLOCKERS=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${N}/dependencies/blocked_by" \
+            --jq '[.[] | select(.state == "open") | .number] | join(", ")')
+          if [ -n "$BLOCKERS" ]; then
+            gh issue comment "$N" --body "Factory refused: blocked by open issue(s) ${BLOCKERS}. Finish those first, or re-label \`agent:queued\` to auto-promote when the last blocker closes."
+            gh issue edit "$N" --remove-label agent:implement --add-label agent:blocked || true
+            echo "accepted=false" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          TITLE=$(jq -r '.title' <<<"$ISSUE")
+          SLUG=$(printf '%s' "$TITLE" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g' | cut -c1-48)
+          [ -n "$SLUG" ] || SLUG="issue"
+          BRANCH="agent/issue-${N}-${SLUG}"
+
+          gh issue edit "$N" --remove-label agent:implement --remove-label agent:blocked --add-label agent:in-progress || true
+
+          {
+            echo "accepted=true"
+            echo "branch=$BRANCH"
+            echo "title=$TITLE"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Checkout
+        if: steps.preflight.outputs.accepted == 'true'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Create branch
+        if: steps.preflight.outputs.accepted == 'true'
+        run: |
+          set -euo pipefail
+          git config user.name "notty-factory[bot]"
+          git config user.email "notty-factory[bot]@users.noreply.github.com"
+          git switch -c "${{ steps.preflight.outputs.branch }}"
+
+      - uses: actions/setup-node@v4
+        if: steps.preflight.outputs.accepted == 'true'
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install project dependencies
+        if: steps.preflight.outputs.accepted == 'true'
+        run: npm ci
+
+      - name: Install opencode (pinned)
+        if: steps.preflight.outputs.accepted == 'true'
+        run: |
+          curl -fsSL https://opencode.ai/install | bash -s -- --version 2.2.5 --no-modify-path
+          opencode --version
+
+      - name: Build the agent prompt from the issue
+        if: steps.preflight.outputs.accepted == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          N: ${{ github.event.issue.number || inputs.issue_number }}
+        run: |
+          set -euo pipefail
+          {
+            printf 'Implement GitHub issue #%s in this repository.\n\n' "$N"
+            printf 'Repository conventions are in AGENTS.md. Read it, GLOSSARY.md, and docs/ before changing code.\n\n'
+            printf 'The issue to implement:\n\n'
+            gh issue view "$N" --json title,body --jq '"## " + .title + "\n\n" + .body'
+            printf '\n\nRules:\n'
+            printf -- '- You are already on the branch for this work. Do not create or switch branches.\n'
+            printf -- '- Do NOT push, do NOT open a PR, do NOT touch GitHub in any way.\n'
+            printf -- '- Make the smallest change that satisfies the acceptance criteria.\n'
+            printf -- '- Run `npm run typecheck`, `npm test`, `npm run depcruise` and `npm run build`; they must all pass.\n'
+            printf -- '- Commit your work in small commits with messages like "Part of #%s: ...".\n' "$N"
+            printf -- '- If you are genuinely blocked, stop and leave a note in .factory-blocked.txt explaining why.\n'
+          } > /tmp/factory-prompt.txt
+          wc -c /tmp/factory-prompt.txt
+
+      - name: Run the agent (token-free environment)
+        if: steps.preflight.outputs.accepted == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.config/opencode"
+          printf '{ "session": { "permissions": "autoaccept" } }\n' > "$HOME/.config/opencode/cli.json"
+          # The agent gets a scrubbed environment: no GITHUB_TOKEN, no GH_TOKEN.
+          env -i HOME="$HOME" PATH="$PATH" TERM=dumb CI=true bash -lc \
+            'cd "$1" && timeout 38m opencode run --model opencode/deepseek-v4.1-flash-free "$(cat /tmp/factory-prompt.txt)"' \
+            _ "$GITHUB_WORKSPACE"
+
+      - name: Commit any uncommitted agent changes
+        if: steps.preflight.outputs.accepted == 'true'
+        env:
+          N: ${{ github.event.issue.number || inputs.issue_number }}
+        run: |
+          set -euo pipefail
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m "Part of #${N}: factory catch-all commit"
+          fi
+
+      - name: Ensure the agent produced work
+        id: diffcheck
+        if: steps.preflight.outputs.accepted == 'true'
+        run: |
+          set -euo pipefail
+          AHEAD=$(git rev-list --count origin/main..HEAD)
+          echo "commits ahead of main: $AHEAD"
+          if [ "$AHEAD" -eq 0 ]; then
+            REASON="(no commits produced by the agent)"
+            [ -f .factory-blocked.txt ] && REASON=$(cat .factory-blocked.txt)
+            echo "reason=$REASON" >>"$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+      - name: Push branch
+        if: steps.preflight.outputs.accepted == 'true' && steps.diffcheck.outcome == 'success'
+        env:
+          BRANCH: ${{ steps.preflight.outputs.branch }}
+        run: |
+          set -euo pipefail
+          # Deterministic branch; a stale remote branch is a recoverable orphan.
+          git push --force origin "HEAD:refs/heads/${BRANCH}"
+
+      - name: Open draft PR
+        id: pr
+        if: steps.preflight.outputs.accepted == 'true' && steps.diffcheck.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          N: ${{ github.event.issue.number || inputs.issue_number }}
+          BRANCH: ${{ steps.preflight.outputs.branch }}
+          TITLE: ${{ steps.preflight.outputs.title }}
+        run: |
+          set -euo pipefail
+          PR_URL=$(gh pr create --draft --base main --head "$BRANCH" \
+            --title "$TITLE" \
+            --body "$(printf 'Closes #%s\n\nImplemented by the notty factory (opencode + DeepSeek V4.1 Flash Free) from the issue text. **Read the diff before merging — a human merge is mandatory.**\n' "$N")")
+          echo "url=$PR_URL" >>"$GITHUB_OUTPUT"
+          gh issue comment "$N" --body "Factory run opened draft PR: ${PR_URL}"
+
+      - name: Mark blocked on failure
+        if: steps.preflight.outputs.accepted == 'true' && failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          N: ${{ github.event.issue.number || inputs.issue_number }}
+          REASON: ${{ steps.diffcheck.outputs.reason }}
+        run: |
+          DETAIL=""
+          [ -n "$REASON" ] && DETAIL=$(printf '\n\n**Why:** %s' "$REASON")
+          gh issue edit "$N" --add-label agent:blocked || true
+          gh issue comment "$N" --body "Factory run failed — see ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}. Fix the cause, then re-add \`agent:implement\` to retry.${DETAIL}"
+
+      - name: Clear the in-progress lock
+        if: steps.preflight.outputs.accepted == 'true' && always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          N: ${{ github.event.issue.number || inputs.issue_number }}
+        run: gh issue edit "$N" --remove-label agent:in-progress || true
