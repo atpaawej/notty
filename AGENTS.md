@@ -6,6 +6,7 @@ Tauri v2 desktop app: Rust shell in `src-tauri/`, React + TypeScript + Vite fron
 
 Package manager: npm.
 Dev: `npm run tauri dev`. Build: `npm run tauri build` (Linux `.deb` + tarball).
+Checks: `npm run typecheck`, `npm test`, `npm run depcruise`.
 
 ## Read only what you need
 
@@ -39,3 +40,7 @@ Canonical roles map to the same label strings in this repo. See `docs/agents/tri
 ### Domain docs
 
 Single-context layout — `GLOSSARY.md` + `docs/adr/`. See `docs/agents/domain.md`.
+
+### Factory
+
+AFK runs are triggered by `agent:implement` on an issue. The rules they obey (branching, commits, checks, no GitHub mutations) live in `docs/agents/factory.md` — read it first if this session was dispatched by the factory. Humans merge.
