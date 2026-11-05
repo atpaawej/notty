@@ -31,7 +31,7 @@ This is the single-issue loop, plus the queue. Wider loops (automated review, PR
 
 - **The agent never holds a GitHub token.** All GitHub mutations happen in orchestrator steps, around the agent.
 - **CI is the leash.** The agent is told the four checks must pass; the draft PR shows CI status; you see red before you review.
-- **The model is free and anonymous** (DeepSeek V4.1 Flash Free via opencode — no API key, no account, limited time, limited context, no SLA). The repo is public and MIT, but nothing here may ever carry secrets; there are none.
+- **The model is account-authenticated free tier** (`OPENCODE_API_KEY`, zero credits; verified from hosted runners). Anonymous access does not work from Azure IPs. Free models are limited-time and the pool can exhaust — CI is the leash, no SLA. The repo is public and MIT; nothing here may ever carry other secrets.
 - **Merges are human.** Always.
 - Push uses `--force` on a deterministic per-issue branch only.
 
@@ -57,9 +57,20 @@ A failed run **consumes** `agent:implement` (it is removed alongside the `agent:
 
 **Why the draft PR is draft** — a factory PR is a starting point for review, not a finished product. Convert to ready-for-review only after you've read the diff and CI is green.
 
+## Setup (required once)
+
+**Workflow permissions** — GitHub forbids `GITHUB_TOKEN` from creating PRs out of the box. With read-only permissions the agent runs fine but the PR step dies with `GitHub Actions is not permitted to create or approve pull requests`. Fix: repo **Settings → Actions → General → Workflow permissions → "Read and write permissions"** and tick **"Allow GitHub Actions to create and approve pull requests"**, or via API:
+
+```bash
+gh api --method PUT repos/<owner>/<repo>/actions/permissions/workflow \
+  -F default_workflow_permissions=write -F can_approve_pull_request_reviews=true
+```
+
+**Model access** — the anonymous free tier is exhausted on GitHub-hosted (Azure) IPs: every run dies with `Free usage limit reached`. The factory authenticates the free tier as an account via the `OPENCODE_API_KEY` repo secret instead (agent step only; zero-credit console account — free-tier models only). Verified: signed-in runs work from Actions. If the free pool ever dries up entirely, the run fails loudly with `agent:blocked` and the fallback is a few dollars of Console credit (`opencode/deepseek-v4.1-flash`, paid) or Go.
+
 ## Costs
 
-$0. Free models + public-repo Actions minutes. The real cost is review attention. If anonymous access gets rate-limited or the free tier disappears, the documented fallback is the $10/mo OpenCode Go plan with `OPENCODE_API_KEY` as a repo secret — the workflow needs one line changed.
+$0 — free-tier models via a zero-credit account, plus public-repo Actions minutes. The real cost is review attention. The anonymous tier was tried first and does not work from hosted runners; paid fallback exists in one line if the free pool vanishes.
 
 ## What this is not (yet)
 
