@@ -39,3 +39,7 @@ Canonical roles map to the same label strings in this repo. See `docs/agents/tri
 ### Domain docs
 
 Single-context layout — `GLOSSARY.md` + `docs/adr/`. See `docs/agents/domain.md`.
+
+## Grilling sessions
+
+When grilling, ask one question at a time.
