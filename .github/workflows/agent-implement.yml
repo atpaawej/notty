@@ -29,7 +29,7 @@ on:
         required: true
         type: number
       model:
-        description: "Model to use (default: anonymous free tier)"
+        description: "Model to use (default: account-authenticated free tier)"
         required: false
         default: "opencode/deepseek-v4.1-flash-free"
         type: string
