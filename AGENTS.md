@@ -44,3 +44,7 @@ Single-context layout — `GLOSSARY.md` + `docs/adr/`. See `docs/agents/domain.m
 ### Factory
 
 AFK runs are triggered by `agent:implement` on an issue. The rules they obey (branching, commits, checks, no GitHub mutations) live in `docs/agents/factory.md` — read it first if this session was dispatched by the factory. Humans merge.
+
+## Grilling sessions
+
+When grilling, ask one question at a time.
