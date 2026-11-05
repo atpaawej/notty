@@ -51,7 +51,7 @@ gh workflow run agent-implement.yml -f issue_number=<N>
 
 **Retry after a failure**
 
-Read the run the `agent:blocked` comment links to. Fix the cause (usually a failing check or an impossible task), then `gh issue edit <N> --add-label agent:implement`.
+A failed run **consumes** `agent:implement` (it is removed alongside the `agent:blocked` label). Read the run the comment links to — on an agent stall the comment also carries why the agent produced no work. Fix the cause (usually a failing check or an impossible task), then `gh issue edit <N> --add-label agent:implement`.
 
 **Stop everything** — GitHub → Actions → the workflow → Disable workflow. Or per issue: remove `agent:implement`; a running job finishes but no new one starts. `agent:in-progress` never auto-expires; remove it if a runner died mid-flight.
 
