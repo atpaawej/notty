@@ -127,6 +127,8 @@ jobs:
         if: steps.preflight.outputs.accepted == 'true'
         run: |
           curl -fsSL https://opencode.ai/v2/install | bash -s -- --version 2.2.5 --no-modify-path
+          # GITHUB_PATH applies to later steps; this step needs it explicitly.
+          export PATH="$HOME/.opencode/bin:$PATH"
           opencode --version
 
       - name: Build the agent prompt from the issue
