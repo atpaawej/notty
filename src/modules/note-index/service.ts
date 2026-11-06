@@ -60,6 +60,13 @@ export interface NoteIndexShape {
   readonly restore: (
     id: string,
   ) => Effect.Effect<IndexedNote | null, NoteIndexError>;
+  /** Every note in the Trash, most recently modified first. */
+  readonly listTrash: () => Effect.Effect<
+    ReadonlyArray<NoteSummary>,
+    NoteIndexError
+  >;
+  /** Permanently delete one trashed note. */
+  readonly purge: (id: string) => Effect.Effect<void, NoteIndexError>;
   readonly rebuild: () => Effect.Effect<void, NoteIndexError>;
 }
 

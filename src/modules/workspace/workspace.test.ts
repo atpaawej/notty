@@ -68,6 +68,14 @@ const makeStore = (root: string): NoteStore => {
       await rm(join(root, folder), { recursive: true, force: true });
       await run((index) => index.rebuild());
     },
+    listTrash: () => run((index) => index.listTrash()),
+    trashNote: async (id) => {
+      await run((index) => index.trash(id));
+    },
+    restoreNote: (id) => run((index) => index.restore(id)),
+    purgeNote: async (id) => {
+      await run((index) => index.purge(id));
+    },
   };
 };
 
@@ -130,7 +138,7 @@ describe("capture", () => {
     expect(state.selectedId).toBe("note-1");
     expect(state.selected).toEqual({
       id: "note-1",
-      title: "2026-11-05",
+      title: "New Note",
       body: "",
       titleLocked: false,
     });
@@ -154,15 +162,26 @@ describe("capture", () => {
 });
 
 describe("auto-title", () => {
-  it("derives the title from the creation date and first body words", async () => {
+  it("derives the title from the first body line without a date prefix", async () => {
     const workspace = createWorkspace(makeStore(vaultRoot), options());
     await workspace.ready;
     await workspace.createNote();
 
     workspace.setBody("# Groceries\n\nMilk, eggs, the good bread.");
 
+    expect(workspace.getState().selected?.title).toBe("Groceries");
+    await workspace.flush();
+  });
+
+  it("strips checklist and list syntax from the auto-title", async () => {
+    const workspace = createWorkspace(makeStore(vaultRoot), options());
+    await workspace.ready;
+    await workspace.createNote();
+
+    workspace.setBody("- [ ] Buy groceries and milk");
+
     expect(workspace.getState().selected?.title).toBe(
-      "2026-11-05 — Groceries Milk, eggs, the good bread.",
+      "Buy groceries and milk",
     );
     await workspace.flush();
   });
@@ -208,7 +227,7 @@ describe("auto-title", () => {
     workspace.setBody(`one two three four five six ${"tail ".repeat(50_000)}`);
 
     expect(workspace.getState().selected?.title).toBe(
-      "2026-11-05 — one two three four five six",
+      "one two three four five six",
     );
     await workspace.flush();
   });
@@ -400,6 +419,7 @@ describe("pin, archive and duplicate", () => {
 
     reopened.selectArchive();
     expect(reopened.getState().showArchived).toBe(true);
+    expect(reopened.getState().selectedView).toBe("archive");
     expect(reopened.getState().notes.map((note) => note.id)).toEqual([id]);
     await reopened.selectNote(id);
     expect(reopened.getState().selected?.body).toBe("Keep me safe");
@@ -453,6 +473,86 @@ const fileExists = async (path: string): Promise<boolean> => {
     return false;
   }
 };
+
+describe("trash", () => {
+  it("moves a note out of the list, shows it in the Trash, and restores it", async () => {
+    const store = makeStore(vaultRoot);
+    const workspace = createWorkspace(store, options());
+    await workspace.ready;
+
+    await workspace.createNote();
+    workspace.setBody("Recover me");
+    await workspace.flush();
+    const id = workspace.getState().selectedId as string;
+
+    await workspace.trashNote(id);
+
+    expect(workspace.getState().notes).toEqual([]);
+    expect(workspace.getState().selectedId).toBeNull();
+    expect(workspace.getState().selected).toBeNull();
+    expect(await store.get(id)).toBeNull();
+
+    await workspace.selectTrash();
+    expect(workspace.getState().selectedView).toBe("trash");
+    expect(workspace.getState().notes.map((note) => note.id)).toEqual([id]);
+    expect(workspace.getState().notes[0]?.title).toBe("Recover me");
+
+    await workspace.restoreNote(id);
+    expect(workspace.getState().notes).toEqual([]);
+
+    workspace.selectFolder(null);
+    expect(workspace.getState().selectedView).toBe("all");
+    expect(workspace.getState().notes.map((note) => note.id)).toEqual([id]);
+    expect((await store.get(id))?.note.body).toBe("Recover me");
+  });
+
+  it("permanently deletes one note and can empty the rest", async () => {
+    const store = makeStore(vaultRoot);
+    const workspace = createWorkspace(store, options());
+    await workspace.ready;
+
+    await workspace.createNote();
+    workspace.setBody("One");
+    await workspace.flush();
+    const first = workspace.getState().selectedId as string;
+
+    await workspace.createNote();
+    workspace.setBody("Two");
+    await workspace.flush();
+    const second = workspace.getState().selectedId as string;
+
+    await workspace.trashNote(first);
+    await workspace.trashNote(second);
+    await workspace.selectTrash();
+    expect(workspace.getState().notes).toHaveLength(2);
+
+    await workspace.purgeNote(first);
+    expect(workspace.getState().notes.map((note) => note.id)).toEqual([second]);
+
+    await workspace.emptyTrash();
+    expect(workspace.getState().notes).toEqual([]);
+    await expect(store.listTrash()).resolves.toEqual([]);
+  });
+
+  it("creates a folder and moves the note into it", async () => {
+    const workspace = createWorkspace(makeStore(vaultRoot), options());
+    await workspace.ready;
+
+    await workspace.createNote();
+    workspace.setBody("Move me");
+    await workspace.flush();
+    const id = workspace.getState().selectedId as string;
+
+    const folder = await workspace.createFolder("Archive 2026");
+    expect(folder).toBe("Archive 2026");
+
+    await workspace.moveNote(id, folder as string);
+    expect((await makeStore(vaultRoot).get(id))?.folder).toBe("Archive 2026");
+    expect(await fileExists(join(vaultRoot, "Archive 2026", `${id}.md`))).toBe(
+      true,
+    );
+  });
+});
 
 describe("folders", () => {
   it("creates and nests folders from the sidebar and restores them", async () => {

@@ -487,6 +487,150 @@ body {
   cursor: default;
 }
 
+/* ---------- Move to Folder dialog ---------- */
+
+.dialog-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.48);
+}
+
+.move-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(420px, 100%);
+  max-height: min(560px, calc(100vh - 32px));
+  padding: 18px 20px 20px;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: #2c2c2e;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
+}
+
+.move-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.move-dialog-header h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+
+.move-dialog-search {
+  width: 100%;
+  margin-bottom: 10px;
+  padding: 7px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.24);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+}
+
+.move-dialog-search:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.move-folder-list {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  min-height: 0;
+  overflow-y: auto;
+  margin-bottom: 14px;
+}
+
+.move-folder-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.move-folder-option svg {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  color: var(--text-secondary);
+}
+
+.move-folder-option span:not(.move-folder-current) {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.move-folder-option:hover,
+.move-folder-option.is-current {
+  background: var(--accent-tint);
+}
+
+.move-folder-option.is-current svg {
+  color: var(--accent);
+}
+
+.move-folder-current {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.move-folder-empty {
+  margin: 4px 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.move-new-folder {
+  display: flex;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hairline);
+}
+
+.move-new-folder input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.24);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+}
+
+.move-new-folder input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 .settings-status,
 .settings-error {
   margin: 12px 0 0;
@@ -636,6 +780,87 @@ body {
   color: var(--text-secondary);
 }
 
+.note-list-item-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.note-folder-chip {
+  max-width: 14ch;
+  overflow: hidden;
+  padding: 1px 6px;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  font-size: 10px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-list-item.is-trash {
+  flex-wrap: wrap;
+}
+
+.trash-item-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  width: 100%;
+  padding: 2px 0 2px 10px;
+}
+
+.trash-action {
+  padding: 3px 8px;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.trash-action:hover {
+  background: var(--selection);
+}
+
+.trash-action.is-danger {
+  color: #ff6b6b;
+}
+
+.trash-action.is-danger:hover {
+  background: rgba(255, 92, 92, 0.14);
+}
+
+.trash-banner {
+  margin: 0 12px 10px;
+  padding: 7px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.trash-empty-button {
+  padding: 4px 9px;
+  border: 1px solid rgba(255, 92, 92, 0.35);
+  border-radius: 6px;
+  background: transparent;
+  color: #ff6b6b;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.trash-empty-button:hover {
+  background: rgba(255, 92, 92, 0.14);
+}
+
 .note-list-empty {
   flex: 1;
   display: flex;
@@ -676,31 +901,39 @@ body {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  overflow-y: auto;
-  padding: 28px clamp(24px, 7vw, 84px) 64px;
+  overflow: hidden;
+  padding: 28px clamp(24px, 7vw, 84px) 0;
 }
 
-.note-folder {
+.editor-header {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 10px;
-  font-size: 11px;
-  color: var(--text-secondary);
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
 }
 
-.note-folder select {
-  max-width: 22rem;
-  padding: 2px 6px;
-  border: 1px solid var(--hairline);
-  border-radius: 5px;
-  background: var(--surface-list);
-  color: var(--text-primary);
-  font: inherit;
+.editor-heading {
+  flex: 1;
+  min-width: 0;
+}
+
+.editor-header .item-menu-trigger {
+  opacity: 1;
+}
+
+.editor-header .item-menu-trigger:hover {
+  background: var(--selection);
+}
+
+.note-timestamp {
+  margin: -8px 0 0;
+  color: var(--text-secondary);
   font-size: 11px;
 }
 
 .note-title {
+  width: 100%;
   border: 0;
   padding: 0;
   margin: 0 0 14px;
@@ -714,72 +947,92 @@ body {
   line-height: 1.2;
 }
 
+.note-title.is-placeholder {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
 .note-title:focus {
   outline: none;
 }
 
 .note-editor-shell {
+  position: relative;
   display: flex;
   flex: 1;
   flex-direction: column;
   min-height: 0;
 }
 
-.note-editor-toolbar {
+.note-editor-dock {
+  position: absolute;
+  bottom: 20px;
+  left: 50%;
+  z-index: 10;
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 4px;
-  margin-bottom: 8px;
+  gap: 2px;
+  max-width: calc(100% - 32px);
+  padding: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 9999px;
+  background: rgba(30, 30, 30, 0.75);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(16px);
+  transform: translateX(-50%);
 }
 
-.editor-toolbar-button {
-  padding: 3px 9px;
-  border: 1px solid var(--hairline);
-  border-radius: 6px;
+.editor-dock-button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
   background: transparent;
   color: var(--text-secondary);
-  font: inherit;
-  font-size: 12px;
-  line-height: 1.4;
   cursor: pointer;
   transition:
     background-color 120ms ease,
-    border-color 120ms ease,
     color 120ms ease;
 }
 
-.editor-toolbar-button:hover {
-  background: var(--selection);
+.editor-dock-button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.editor-dock-button:hover {
+  background: rgba(255, 255, 255, 0.08);
   color: var(--text-primary);
 }
 
-.editor-toolbar-button.is-active {
-  border-color: var(--accent);
+.editor-dock-button.is-active {
   background: var(--accent-tint);
   color: var(--accent);
 }
 
-.editor-toolbar-button.is-danger {
+.editor-dock-button.is-danger {
   color: #ff6b6b;
 }
 
-.editor-toolbar-button.is-danger:hover {
+.editor-dock-button.is-danger:hover {
   background: rgba(255, 92, 92, 0.14);
 }
 
-.note-editor-toolbar-separator {
+.note-editor-dock-separator {
   width: 1px;
-  height: 16px;
-  margin: 0 2px;
-  background: var(--hairline);
+  height: 18px;
+  margin: 0 3px;
+  background: rgba(255, 255, 255, 0.12);
 }
 
 .editor-alt-field {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-secondary);
 }
 
@@ -788,14 +1041,14 @@ body {
 }
 
 .editor-alt-input {
-  width: 180px;
+  width: 140px;
   padding: 3px 8px;
-  border: 1px solid var(--hairline);
-  border-radius: 6px;
-  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.25);
   color: var(--text-primary);
   font: inherit;
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1.4;
 }
 
@@ -807,10 +1060,14 @@ body {
 .note-editor {
   flex: 1;
   min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 
 .note-editor-content {
   min-height: 60vh;
+  /* Clear the floating dock so the last line is never hidden behind it. */
+  padding-bottom: 96px;
   outline: none;
   font-size: 14px;
   line-height: 1.65;
@@ -870,30 +1127,71 @@ body {
 .note-editor-content ul[data-type="taskList"] > li {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
+  gap: 10px;
 }
 
 .note-editor-content ul[data-type="taskList"] > li > label {
   flex: 0 0 auto;
-  margin-top: 0.2em;
+  margin-top: 0.24em;
   line-height: 1;
 }
 
 .note-editor-content ul[data-type="taskList"] > li > label input[type="checkbox"] {
-  width: 14px;
-  height: 14px;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
   margin: 0;
-  accent-color: var(--accent);
+  padding: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  border: 1.5px solid rgba(255, 255, 255, 0.35);
+  border-radius: 50%;
+  background: transparent;
   cursor: pointer;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    opacity 160ms ease;
+}
+
+.note-editor-content ul[data-type="taskList"] > li > label input[type="checkbox"]:hover {
+  border-color: var(--accent);
+}
+
+.note-editor-content ul[data-type="taskList"] > li > label input[type="checkbox"]:checked {
+  border-color: var(--accent);
+  background-color: var(--accent);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 6.4 4.8 8.7 9.5 3.6' fill='none' stroke='white' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 12px 12px;
+}
+
+.note-editor-content ul[data-type="taskList"] > li > label input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .note-editor-content ul[data-type="taskList"] > li > div {
   flex: 1;
   min-width: 0;
+  transition:
+    color 160ms ease,
+    opacity 160ms ease;
+}
+
+.note-editor-content ul[data-type="taskList"] > li > div > p {
+  margin-top: 0;
+}
+
+.note-editor-content ul[data-type="taskList"] > li > div > p:last-child {
+  margin-bottom: 0;
 }
 
 .note-editor-content ul[data-type="taskList"] > li[data-checked="true"] > div {
   color: var(--text-secondary);
+  opacity: 0.65;
   text-decoration: line-through;
 }
 

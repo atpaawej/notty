@@ -38,8 +38,6 @@ export interface Note {
 export interface AutoTitleOptions {
   /** Maximum number of body words to keep. Defaults to 6. */
   readonly maxWords?: number;
-  /** Text between the date and the words. Defaults to an em dash. */
-  readonly separator?: string;
 }
 
 const KNOWN_KEYS = [
@@ -168,33 +166,29 @@ export const parseNote = parse;
 export const serializeNote = serialize;
 
 /**
- * Derive the title a new note shows until the user edits it:
- * the creation date plus the first words of the body.
+ * Derive the title a new note shows until the user edits it: the first words
+ * of the first non-empty body line, with Markdown syntax stripped.
  *
  * Accepts a Note (or anything with `created` and `body`), or the two values
- * separately. The workspace decides when to call this; parse never does.
+ * separately. `created` is accepted for callers that still pass it but is no
+ * longer part of the title; dates belong in metadata, not the note name. The
+ * workspace decides when to call this; parse never does.
  */
 export const deriveAutoTitle = (
   createdOrNote: string | Date | Pick<Note, "created" | "body">,
   body?: string,
   options: AutoTitleOptions = {},
 ): string => {
-  const created =
-    typeof createdOrNote === "object" && !(createdOrNote instanceof Date)
-      ? createdOrNote.created
-      : createdOrNote;
   const sourceBody =
     typeof createdOrNote === "object" && !(createdOrNote instanceof Date)
       ? createdOrNote.body
       : (body ?? "");
 
-  const date = formatDate(created);
-  const words = firstWords(sourceBody, options.maxWords ?? 6);
-  const separator = options.separator ?? " — ";
-
-  if (date.length === 0) return words;
-  if (words.length === 0) return date;
-  return `${date}${separator}${words}`;
+  const words = firstWords(
+    firstTitleLine(sourceBody),
+    options.maxWords ?? 6,
+  );
+  return words.length > 0 ? words : "New Note";
 };
 
 export const deriveTitle = deriveAutoTitle;
@@ -555,14 +549,34 @@ const isPlainObject = (value: unknown): value is Record<string, unknown> => {
 const hasOwn = (object: object, key: string): boolean =>
   Object.prototype.hasOwnProperty.call(object, key);
 
-const formatDate = (value: string | Date): string => {
-  if (value instanceof Date) {
-    return Number.isNaN(value.getTime())
-      ? ""
-      : value.toISOString().slice(0, 10);
+/** Title derivation only needs the opening of the body, never the whole note. */
+const TITLE_SCAN_LIMIT = 4096;
+
+/**
+ * Strip the Markdown syntax a captured line commonly carries. Only leading
+ * structural markers are removed from the start; inline emphasis markers are
+ * removed wherever they appear.
+ */
+const cleanTitleLine = (line: string): string =>
+  line
+    .replace(/\r$/, "")
+    .replace(/^\s{0,3}#{1,6}\s+/, "")
+    .replace(/^\s{0,3}(?:>\s?)+/, "")
+    .replace(/^\s*[-*+]\s+\[[ xX]\]\s+/, "")
+    .replace(/^\s*(?:[-*+]|\d+[.)])\s+/, "")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/[`*_~]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+/** The first line of the body that still has visible text after cleaning. */
+const firstTitleLine = (body: string): string => {
+  for (const line of body.slice(0, TITLE_SCAN_LIMIT).split("\n")) {
+    const cleaned = cleanTitleLine(line);
+    if (cleaned.length > 0) return cleaned;
   }
-  const match = /^(\d{4}-\d{2}-\d{2})/.exec(value.trim());
-  return match ? match[1] : value.trim();
+  return "";
 };
 
 const firstWords = (body: string, maxWords: number): string => {

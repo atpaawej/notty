@@ -13,4 +13,5 @@ export type {
   WorkspaceController,
   WorkspaceOptions,
   WorkspaceState,
+  WorkspaceView,
 } from "./workspace";

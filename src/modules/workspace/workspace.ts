@@ -31,6 +31,14 @@ export interface NoteStore {
   readonly createFolder: (folder: string) => Promise<void>;
   readonly renameFolder: (folder: string, nextFolder: string) => Promise<void>;
   readonly deleteFolder: (folder: string) => Promise<void>;
+  /** Notes currently in the vault's Trash, most recently modified first. */
+  readonly listTrash: () => Promise<ReadonlyArray<NoteSummary>>;
+  /** Move a note into the Trash. It leaves the normal list immediately. */
+  readonly trashNote: (id: string) => Promise<void>;
+  /** Put a trashed note back in its original folder. */
+  readonly restoreNote: (id: string) => Promise<IndexedNote | null>;
+  /** Permanently remove one note from the Trash. */
+  readonly purgeNote: (id: string) => Promise<void>;
 }
 
 /** The part of a note the editor displays. */
@@ -41,6 +49,8 @@ export interface EditorNote {
   readonly titleLocked: boolean;
 }
 
+export type WorkspaceView = "all" | "archive" | "trash";
+
 export interface WorkspaceState {
   /** Note list, last touched first (pinned, then modified, then id). */
   readonly notes: ReadonlyArray<NoteSummary>;
@@ -48,6 +58,8 @@ export interface WorkspaceState {
   readonly folders: ReadonlyArray<string>;
   /** `null` means All Notes; otherwise an exact folder path. */
   readonly selectedFolder: string | null;
+  /** Which library section the note list shows. */
+  readonly selectedView: WorkspaceView;
   /** True while the note list shows archived notes instead of active ones. */
   readonly showArchived: boolean;
   readonly selectedId: string | null;
@@ -87,6 +99,8 @@ export interface WorkspaceController {
   readonly selectFolder: (folder: string | null) => void;
   /** Show archived notes; the normal list hides them. */
   readonly selectArchive: () => void;
+  /** Show trashed notes, restorable for 30 days. */
+  readonly selectTrash: () => Promise<void>;
   /** Set the search text; results arrive after the search debounce. */
   readonly setSearchQuery: (query: string) => void;
   /** Pin or unpin a note with one action. */
@@ -96,13 +110,21 @@ export interface WorkspaceController {
   /** Copy a note into the same folder with a new identity and timestamps. */
   readonly duplicateNote: (id: string) => Promise<void>;
   /** Create a folder (nested under the selection) and select it. */
-  readonly createFolder: (name: string) => Promise<void>;
+  readonly createFolder: (name: string) => Promise<string | null>;
   /** Rename a folder in place, keeping its notes. */
   readonly renameFolder: (folder: string, name: string) => Promise<void>;
   /** Delete a folder and the notes beneath it. */
   readonly deleteFolder: (folder: string) => Promise<void>;
   /** Move a note into a folder; `""` is the vault root. */
   readonly moveNote: (id: string, folder: string) => Promise<void>;
+  /** Move a note into the Trash. */
+  readonly trashNote: (id: string) => Promise<void>;
+  /** Restore a trashed note to its original folder. */
+  readonly restoreNote: (id: string) => Promise<void>;
+  /** Permanently delete one trashed note. */
+  readonly purgeNote: (id: string) => Promise<void>;
+  /** Permanently delete every trashed note. */
+  readonly emptyTrash: () => Promise<void>;
   /** Update the body; auto-title follows unless the title is user-owned. */
   readonly setBody: (markdown: string) => void;
   /** Take ownership of the title; auto-titling stops permanently. */
@@ -167,18 +189,21 @@ const sortedFolders = (
   folders: ReadonlyArray<string>,
 ): ReadonlyArray<string> => [...folders].sort((left, right) => left.localeCompare(right));
 
-/** The notes the current view shows: one folder or all, active or archived. */
-const viewOf = (
+/** The notes the current view shows: one folder, the archive, or the Trash. */
+const notesForView = (
+  view: WorkspaceView,
   notes: ReadonlyArray<NoteSummary>,
   selectedFolder: string | null,
-  showArchived: boolean,
-): ReadonlyArray<NoteSummary> =>
-  notes.filter((note) =>
-    showArchived
-      ? note.archived
-      : !note.archived &&
-        (selectedFolder === null || note.folder === selectedFolder),
+  trash: ReadonlyArray<NoteSummary>,
+): ReadonlyArray<NoteSummary> => {
+  if (view === "trash") return trash;
+  if (view === "archive") return notes.filter((note) => note.archived);
+  return notes.filter(
+    (note) =>
+      !note.archived &&
+      (selectedFolder === null || note.folder === selectedFolder),
   );
+};
 
 const parentOf = (folder: string): string => {
   const slash = folder.lastIndexOf("/");
@@ -214,34 +239,14 @@ const remapFolder = (folder: string, from: string, to: string): string => {
   return folder.startsWith(`${from}/`) ? `${to}${folder.slice(from.length)}` : folder;
 };
 
-/**
- * The auto-title reads the body's opening words, not its Markdown syntax.
- * Only a bounded prefix is scanned so a very long note costs the same as a
- * short one on every keystroke.
- */
-const cleanTitleText = (text: string): string =>
-  text
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/^\s{0,3}#{1,6}\s+/gm, "")
-    .replace(/^\s*(?:[-*+]|\d+[.)])\s+/gm, "")
-    .replace(/[`*_~#]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-
-const leadingWords = (markdown: string, maxWords: number): string => {
-  const words: string[] = [];
-  let index = 0;
-
-  while (index < markdown.length && words.length < maxWords) {
-    while (index < markdown.length && /\s/.test(markdown[index])) index += 1;
-    if (index >= markdown.length) break;
-    const start = index;
-    while (index < markdown.length && !/\s/.test(markdown[index])) index += 1;
-    words.push(markdown.slice(start, index));
+const compareSummaryByModified = (
+  left: NoteSummary,
+  right: NoteSummary,
+): number => {
+  if (left.modified !== right.modified) {
+    return left.modified < right.modified ? 1 : -1;
   }
-
-  return cleanTitleText(words.join(" "));
+  return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
 };
 
 export function createWorkspace(
@@ -259,6 +264,7 @@ export function createWorkspace(
     notes: [],
     folders: [],
     selectedFolder: null,
+    selectedView: "all",
     showArchived: false,
     selectedId: null,
     selected: null,
@@ -269,6 +275,8 @@ export function createWorkspace(
   };
   /** Every known note, including archived and other folders. */
   let allNotes: ReadonlyArray<NoteSummary> = [];
+  /** Every note currently in the Trash. */
+  let trashNotes: ReadonlyArray<NoteSummary> = [];
 
   const listeners = new Set<() => void>();
   let draft: Note | null = null;
@@ -298,7 +306,12 @@ export function createWorkspace(
     allNotes = withSummary(allNotes, summaryOf(note, draftFolder));
     update({
       ...state,
-      notes: viewOf(allNotes, state.selectedFolder, state.showArchived),
+      notes: notesForView(
+        state.selectedView,
+        allNotes,
+        state.selectedFolder,
+        trashNotes,
+      ),
       selectedId: note.id,
       selected: editorNote(note),
     });
@@ -321,7 +334,12 @@ export function createWorkspace(
     allNotes = withSummary(allNotes, summaryOf(saved.note, saved.folder));
     update({
       ...state,
-      notes: viewOf(allNotes, state.selectedFolder, state.showArchived),
+      notes: notesForView(
+        state.selectedView,
+        allNotes,
+        state.selectedFolder,
+        trashNotes,
+      ),
       ...(isDraft
         ? { selectedId: saved.note.id, selected: editorNote(saved.note) }
         : {}),
@@ -362,11 +380,7 @@ export function createWorkspace(
   const retitle = (note: Note, body: string): string =>
     note.titleLocked === true
       ? note.title
-      : deriveAutoTitle(
-          note.created,
-          leadingWords(body, autoTitleWords + 4),
-          { maxWords: autoTitleWords },
-        );
+      : deriveAutoTitle(note.created, body, { maxWords: autoTitleWords });
 
   const createNote = async (): Promise<void> => {
     // A captured note should be visible immediately, not hidden behind an
@@ -392,9 +406,10 @@ export function createWorkspace(
     allNotes = withSummary(allNotes, summaryOf(note, draftFolder));
     update({
       ...state,
-      notes: viewOf(allNotes, state.selectedFolder, false),
+      notes: notesForView("all", allNotes, state.selectedFolder, trashNotes),
       selectedId: note.id,
       selected: editorNote(note),
+      selectedView: "all",
       showArchived: false,
       ready: true,
     });
@@ -405,6 +420,8 @@ export function createWorkspace(
   };
 
   const selectNote = async (id: string): Promise<void> => {
+    // Trashed notes are not openable; the list only offers restore and purge.
+    if (state.selectedView === "trash") return;
     if (draft !== null && draft.id === id) return;
     await flush();
 
@@ -428,8 +445,9 @@ export function createWorkspace(
     update({
       ...state,
       selectedFolder: folder,
+      selectedView: "all",
       showArchived: false,
-      notes: viewOf(allNotes, folder, false),
+      notes: notesForView("all", allNotes, folder, trashNotes),
     });
   };
 
@@ -438,9 +456,42 @@ export function createWorkspace(
     update({
       ...state,
       selectedFolder: null,
+      selectedView: "archive",
       showArchived: true,
-      notes: viewOf(allNotes, null, true),
+      notes: notesForView("archive", allNotes, null, trashNotes),
     });
+  };
+
+  const selectTrash = async (): Promise<void> => {
+    if (state.searchQuery.length > 0) setSearchQuery("");
+    await flush();
+    // The editor is for active notes; opening the Trash closes the draft so a
+    // hidden note cannot keep saving in the background.
+    draft = null;
+    draftFolder = "";
+    try {
+      trashNotes = [...(await store.listTrash())].sort(compareSummaryByModified);
+      update({
+        ...state,
+        selectedFolder: null,
+        selectedView: "trash",
+        showArchived: false,
+        notes: trashNotes,
+        selectedId: null,
+        selected: null,
+      });
+    } catch (cause) {
+      console.warn("Notty could not read the Trash", cause);
+      update({
+        ...state,
+        selectedFolder: null,
+        selectedView: "trash",
+        showArchived: false,
+        notes: [],
+        selectedId: null,
+        selected: null,
+      });
+    }
   };
 
   const setSearchQuery = (query: string): void => {
@@ -516,7 +567,12 @@ export function createWorkspace(
       allNotes = withSummary(allNotes, summaryOf(saved.note, saved.folder));
       update({
         ...state,
-        notes: viewOf(allNotes, state.selectedFolder, state.showArchived),
+        notes: notesForView(
+          state.selectedView,
+          allNotes,
+          state.selectedFolder,
+          trashNotes,
+        ),
         ...(deselect ? { selectedId: null, selected: null } : {}),
       });
     } catch (cause) {
@@ -548,7 +604,8 @@ export function createWorkspace(
       allNotes = withSummary(allNotes, summaryOf(copy, found.folder));
       update({
         ...state,
-        notes: viewOf(allNotes, state.selectedFolder, false),
+        notes: notesForView("all", allNotes, state.selectedFolder, trashNotes),
+        selectedView: "all",
         showArchived: false,
         selectedId: copy.id,
         selected: editorNote(copy),
@@ -560,9 +617,9 @@ export function createWorkspace(
     }
   };
 
-  const createFolder = async (name: string): Promise<void> => {
+  const createFolder = async (name: string): Promise<string | null> => {
     const segments = folderSegments(name);
-    if (segments === null) return;
+    if (segments === null) return null;
     const relative = segments.join("/");
     const folder =
       state.selectedFolder === null
@@ -572,9 +629,18 @@ export function createWorkspace(
     try {
       await store.createFolder(folder);
       const folders = await store.listFolders();
-      update({ ...state, folders: sortedFolders(folders), selectedFolder: folder });
+      update({
+        ...state,
+        folders: sortedFolders(folders),
+        selectedFolder: folder,
+        selectedView: "all",
+        showArchived: false,
+        notes: notesForView("all", allNotes, folder, trashNotes),
+      });
+      return folder;
     } catch (cause) {
       console.warn("Notty could not create a folder", cause);
+      return null;
     }
   };
 
@@ -604,7 +670,12 @@ export function createWorkspace(
       update({
         ...state,
         folders: sortedFolders(folders),
-        notes: viewOf(allNotes, selectedFolder, state.showArchived),
+        notes: notesForView(
+          state.selectedView,
+          allNotes,
+          selectedFolder,
+          trashNotes,
+        ),
         selectedFolder,
       });
     } catch (cause) {
@@ -634,7 +705,12 @@ export function createWorkspace(
       update({
         ...state,
         folders: sortedFolders(folders),
-        notes: viewOf(allNotes, selectedFolder, state.showArchived),
+        notes: notesForView(
+          state.selectedView,
+          allNotes,
+          selectedFolder,
+          trashNotes,
+        ),
         selectedFolder,
         ...(removedDraft ? { selectedId: null, selected: null } : {}),
       });
@@ -658,11 +734,113 @@ export function createWorkspace(
         allNotes = sorted(await store.list({ includeArchived: true }));
         update({
           ...state,
-          notes: viewOf(allNotes, state.selectedFolder, state.showArchived),
+          notes: notesForView(
+            state.selectedView,
+            allNotes,
+            state.selectedFolder,
+            trashNotes,
+          ),
         });
       }
     } catch (cause) {
       console.warn("Notty could not move a note", cause);
+    }
+  };
+
+  const trashNote = async (id: string): Promise<void> => {
+    await flush();
+    try {
+      await store.trashNote(id);
+      allNotes = allNotes.filter((note) => note.id !== id);
+      if (draft !== null && draft.id === id) {
+        draft = null;
+        draftFolder = "";
+      }
+      update({
+        ...state,
+        notes: notesForView(
+          state.selectedView,
+          allNotes,
+          state.selectedFolder,
+          trashNotes,
+        ),
+        searchResults: state.searchResults.filter((note) => note.id !== id),
+        ...(state.selectedId === id ? { selectedId: null, selected: null } : {}),
+      });
+      if (state.selectedView === "trash") {
+        trashNotes = [...(await store.listTrash())].sort(compareSummaryByModified);
+        update({ ...state, notes: trashNotes });
+      }
+    } catch (cause) {
+      console.warn("Notty could not trash a note", cause);
+    }
+  };
+
+  const restoreNote = async (id: string): Promise<void> => {
+    try {
+      const restored = await store.restoreNote(id);
+      trashNotes = trashNotes.filter((note) => note.id !== id);
+      if (restored !== null) {
+        allNotes = withSummary(
+          allNotes,
+          summaryOf(restored.note, restored.folder),
+        );
+      }
+      update({
+        ...state,
+        notes: notesForView(
+          state.selectedView,
+          allNotes,
+          state.selectedFolder,
+          trashNotes,
+        ),
+      });
+      if (state.selectedView === "trash") {
+        trashNotes = [...(await store.listTrash())].sort(compareSummaryByModified);
+        update({ ...state, notes: trashNotes });
+      }
+    } catch (cause) {
+      console.warn("Notty could not restore a note", cause);
+    }
+  };
+
+  const purgeNote = async (id: string): Promise<void> => {
+    try {
+      await store.purgeNote(id);
+      trashNotes = trashNotes.filter((note) => note.id !== id);
+      update({
+        ...state,
+        notes: notesForView(
+          state.selectedView,
+          allNotes,
+          state.selectedFolder,
+          trashNotes,
+        ),
+        searchResults: state.searchResults.filter((note) => note.id !== id),
+      });
+    } catch (cause) {
+      console.warn("Notty could not delete a note permanently", cause);
+    }
+  };
+
+  const emptyTrash = async (): Promise<void> => {
+    try {
+      const trashed = await store.listTrash();
+      for (const note of trashed) {
+        await store.purgeNote(note.id);
+      }
+      trashNotes = [];
+      update({
+        ...state,
+        notes: notesForView(
+          state.selectedView,
+          allNotes,
+          state.selectedFolder,
+          trashNotes,
+        ),
+      });
+    } catch (cause) {
+      console.warn("Notty could not empty the Trash", cause);
     }
   };
 
@@ -709,7 +887,12 @@ export function createWorkspace(
         ]);
         update({
           ...state,
-          notes: viewOf(allNotes, state.selectedFolder, state.showArchived),
+          notes: notesForView(
+            state.selectedView,
+            allNotes,
+            state.selectedFolder,
+            trashNotes,
+          ),
           folders: folderList,
           ready: true,
         });
@@ -717,10 +900,11 @@ export function createWorkspace(
       }
 
       allNotes = loaded;
-      const displayed = viewOf(
+      const displayed = notesForView(
+        state.selectedView,
         allNotes,
         state.selectedFolder,
-        state.showArchived,
+        trashNotes,
       );
       update({ ...state, notes: displayed, folders: folderList, ready: true });
 
@@ -758,6 +942,7 @@ export function createWorkspace(
     selectNote,
     selectFolder,
     selectArchive,
+    selectTrash,
     setSearchQuery,
     togglePin,
     setArchived,
@@ -766,6 +951,10 @@ export function createWorkspace(
     renameFolder,
     deleteFolder,
     moveNote,
+    trashNote,
+    restoreNote,
+    purgeNote,
+    emptyTrash,
     setBody,
     setTitle,
     flush,

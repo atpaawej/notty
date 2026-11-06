@@ -214,6 +214,70 @@ for (const adapter of adapters) {
       ).resolves.toMatchObject([{ id: "moving" }]);
     });
 
+    it("lists the Trash in most-recently-modified order and restores by id", async () => {
+      await withIndex(layer(), (index) =>
+        Effect.gen(function* () {
+          yield* index.save(
+            makeNote("newer", { modified: "2026-03-01T00:00:00Z" }),
+            "Work",
+          );
+          yield* index.save(
+            makeNote("older", { modified: "2026-02-01T00:00:00Z" }),
+            "",
+          );
+          yield* index.trash("newer");
+          yield* index.trash("older");
+        }),
+      );
+
+      await expect(
+        withIndex(layer(), (index) => index.listTrash()),
+      ).resolves.toEqual([
+        expect.objectContaining({ id: "newer", folder: "Work" }),
+        expect.objectContaining({ id: "older", folder: "" }),
+      ]);
+
+      const restored = await withIndex(layer(), (index) =>
+        index.restore("newer"),
+      );
+      expect(restored?.folder).toBe("Work");
+      expect(await fileExists(join(vaultRoot, "Work", "newer.md"))).toBe(true);
+      await expect(
+        withIndex(layer(), (index) => index.listTrash()),
+      ).resolves.toMatchObject([{ id: "older" }]);
+    });
+
+    it("purges one trashed note without touching the others", async () => {
+      await withIndex(layer(), (index) =>
+        Effect.gen(function* () {
+          yield* index.save(makeNote("keep"), "");
+          yield* index.save(makeNote("drop"), "");
+          yield* index.trash("keep");
+          yield* index.trash("drop");
+        }),
+      );
+
+      await withIndex(layer(), (index) => index.purge("drop"));
+
+      await expect(
+        withIndex(layer(), (index) => index.listTrash()),
+      ).resolves.toMatchObject([{ id: "keep" }]);
+      expect(await fileExists(join(vaultRoot, ".trash", "drop.md"))).toBe(false);
+      expect(await fileExists(join(vaultRoot, ".trash", "keep.md"))).toBe(true);
+      await expect(
+        withIndex(layer(), (index) => index.get("drop")),
+      ).resolves.toBeNull();
+    });
+
+    it("returns an empty Trash list when nothing has been deleted", async () => {
+      await expect(
+        withIndex(layer(), (index) => index.listTrash()),
+      ).resolves.toEqual([]);
+      await expect(
+        withIndex(layer(), (index) => index.restore("missing")),
+      ).resolves.toBeNull();
+    });
+
     it("finds notes by title and body, prefix-matching the final word", async () => {
       await withIndex(layer(), (index) =>
         Effect.gen(function* () {

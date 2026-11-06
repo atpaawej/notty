@@ -399,6 +399,20 @@ export const createNottyClient = async (
     return restored;
   };
 
+  const listTrashNotes = (): Promise<ReadonlyArray<NoteSummary>> =>
+    run("list the Trash", () =>
+      Effect.gen(function* () {
+        const index = yield* NoteIndex;
+        return yield* index.listTrash();
+      }));
+
+  const purgeNote = (id: string): Promise<void> =>
+    run("delete the note permanently", () =>
+      Effect.gen(function* () {
+        const index = yield* NoteIndex;
+        yield* index.purge(id);
+      }));
+
   const listFolders = (): Promise<ReadonlyArray<string>> =>
     run("list the folders", () =>
       Effect.gen(function* () {
@@ -457,6 +471,8 @@ export const createNottyClient = async (
     duplicateNote,
     trashNote,
     restoreNote,
+    listTrashNotes,
+    purgeNote,
     listFolders,
     createFolder,
     renameFolder,
