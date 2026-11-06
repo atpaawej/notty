@@ -12,7 +12,7 @@ import {
   useSyncExternalStore,
   type MouseEvent as ReactMouseEvent,
 } from "react";
-import { NoteEditor, type ImageUpload, type StoredImage } from "../editor";
+import { NoteEditor, type ClipboardImageReader, type ImageUpload, type StoredImage } from "../editor";
 import type { NoteSummary } from "../note-index";
 import {
   createWorkspace,
@@ -25,6 +25,8 @@ import {
 export interface WorkspaceAttachments {
   readonly saveImage: (upload: ImageUpload) => Promise<StoredImage>;
   readonly imageSrc: (path: string) => string;
+  /** Native clipboard fallback for Linux paste events with no DOM payload. */
+  readonly readClipboardImage?: ClipboardImageReader;
 }
 
 export interface WorkspaceProps {
@@ -1005,6 +1007,7 @@ export function Workspace({ store, attachments, onController, onOpenSettings, ho
               body={selected.body}
               onChange={controller.setBody}
               saveImage={attachments?.saveImage}
+              readClipboardImage={attachments?.readClipboardImage}
               resolveImageSrc={attachments?.imageSrc}
             />
           </div>
