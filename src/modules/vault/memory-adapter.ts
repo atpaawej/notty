@@ -18,6 +18,7 @@ const testPaths: VaultPaths = {
 interface MemoryEntry {
   readonly kind: "file" | "directory";
   readonly mtime: Date | null;
+  readonly bytes?: Uint8Array;
 }
 
 const nameOf = (path: string): string => path.slice(path.lastIndexOf("/") + 1);
@@ -69,6 +70,18 @@ const createMemoryFileSystem = (): VaultFileSystem => {
         isDirectory: entry.kind === "directory",
         mtime: entry.mtime,
       };
+    },
+    writeFile: async (path, contents) => {
+      const parent = path.slice(0, Math.max(path.lastIndexOf("/"), 0)) || "/";
+      const parentEntry = entries.get(parent);
+      if (parentEntry === undefined || parentEntry.kind !== "directory") {
+        throw new Error(`No such directory: ${parent}`);
+      }
+      const existing = entries.get(path);
+      if (existing?.kind === "directory") {
+        throw new Error(`Not a file: ${path}`);
+      }
+      entries.set(path, { kind: "file", mtime: new Date(), bytes: contents });
     },
     rename: async (from, to) => {
       const entry = entries.get(from);

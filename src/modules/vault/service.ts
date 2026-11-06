@@ -59,6 +59,23 @@ export interface VaultFileInfo {
   readonly mtime: Date | null;
 }
 
+/** Bytes handed to the vault for storage as an attachment. */
+export interface AttachmentUpload {
+  readonly bytes: Uint8Array;
+  /** Original filename. Its extension and name are kept for the note. */
+  readonly name: string;
+  /** Used to infer an extension when the name does not carry one. */
+  readonly mimeType?: string;
+}
+
+/** A stored attachment: where it lives and what to call it in a note. */
+export interface Attachment {
+  /** Vault-relative POSIX path, e.g. `attachments/<uuid>.png`. */
+  readonly path: string;
+  /** The original filename, suitable as default alt text. */
+  readonly name: string;
+}
+
 /**
  * The filesystem seam behind the Vault service. Each runtime adapter supplies
  * its own implementation; the retention logic itself lives in vault.ts so it
@@ -69,6 +86,7 @@ export interface VaultFileSystem {
   readonly makeDirectory: (path: string) => Promise<void>;
   readonly readDirectory: (path: string) => Promise<ReadonlyArray<DirectoryEntry>>;
   readonly stat: (path: string) => Promise<VaultFileInfo>;
+  readonly writeFile: (path: string, contents: Uint8Array) => Promise<void>;
   readonly rename: (from: string, to: string) => Promise<void>;
   readonly remove: (
     path: string,
@@ -96,6 +114,13 @@ export interface VaultShape {
   ) => Effect.Effect<string, VaultError>;
   /** Remove a folder and everything beneath it. */
   readonly deleteFolder: (folder: string) => Effect.Effect<void, VaultError>;
+  /**
+   * Write image bytes to the vault-level attachments directory under a UUID
+   * filename. The returned path is what a note body references.
+   */
+  readonly saveAttachment: (
+    upload: AttachmentUpload,
+  ) => Effect.Effect<Attachment, VaultError>;
 }
 
 export class Vault extends Context.Service<Vault, VaultShape>()("notty/Vault") {}

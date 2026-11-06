@@ -9,6 +9,8 @@ import { Effect } from "effect";
 import {
   joinVaultPath,
   VaultError,
+  type Attachment,
+  type AttachmentUpload,
   type VaultFileSystem,
   type VaultResolvePaths,
   type VaultShape,
@@ -21,6 +23,48 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const TRASH_RETENTION_MS = TRASH_RETENTION_DAYS * DAY_MS;
 const MARKDOWN_SUFFIX = ".md";
 const ATTACHMENTS_DIRECTORY = "attachments";
+const MAX_EXTENSION_LENGTH = 12;
+
+/** Extensions used when a pasted blob has no filename to borrow one from. */
+const EXTENSIONS_BY_MIME: Readonly<Record<string, string>> = {
+  "image/avif": ".avif",
+  "image/bmp": ".bmp",
+  "image/gif": ".gif",
+  "image/jpeg": ".jpg",
+  "image/png": ".png",
+  "image/svg+xml": ".svg",
+  "image/tiff": ".tiff",
+  "image/webp": ".webp",
+};
+
+const basenameOf = (path: string): string => {
+  const segments = path.replace(/\\/g, "/").split("/");
+  return segments[segments.length - 1] ?? "";
+};
+
+/**
+ * Keep the original extension when it is safe for a filename; otherwise fall
+ * back to the MIME type. The name never becomes part of the path.
+ */
+const extensionOf = (upload: AttachmentUpload): string => {
+  const name = basenameOf(upload.name).trim();
+  const dot = name.lastIndexOf(".");
+  if (dot > 0 && dot < name.length - 1) {
+    const extension = name.slice(dot).toLowerCase();
+    if (new RegExp(`^\\.[a-z0-9]{1,${MAX_EXTENSION_LENGTH}}$`).test(extension)) {
+      return extension;
+    }
+  }
+  return EXTENSIONS_BY_MIME[(upload.mimeType ?? "").toLowerCase()] ?? ".bin";
+};
+
+const attachmentId = (): string => {
+  const crypto = globalThis.crypto;
+  if (crypto !== undefined && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+};
 
 interface WalkResult {
   readonly removed: number;
@@ -244,6 +288,31 @@ export const makeVault = (
       return result.removed;
     });
 
+  const saveAttachment = (
+    upload: AttachmentUpload,
+  ): Effect.Effect<Attachment, VaultError> =>
+    Effect.gen(function* () {
+      const paths = yield* resolvePaths();
+      const filename = `${attachmentId()}${extensionOf(upload)}`;
+      const relativePath = `${ATTACHMENTS_DIRECTORY}/${filename}`;
+      const absolutePathToFile = absolutePath(paths.root, relativePath);
+
+      // The vault may be handed an image before `ensure` has run, so the
+      // attachments directory is created here as part of the write.
+      yield* attempt("saveAttachment", paths.attachments, () =>
+        fs.makeDirectory(paths.attachments),
+      );
+      yield* attempt("saveAttachment", absolutePathToFile, () =>
+        fs.writeFile(absolutePathToFile, upload.bytes),
+      );
+
+      const originalName = basenameOf(upload.name).trim();
+      return {
+        path: relativePath,
+        name: originalName.length > 0 ? originalName : filename,
+      };
+    });
+
   return {
     location: resolvePaths,
     ensure,
@@ -252,5 +321,6 @@ export const makeVault = (
     createFolder,
     renameFolder,
     deleteFolder,
+    saveAttachment,
   };
 };

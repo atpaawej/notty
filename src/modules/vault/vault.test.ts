@@ -1,4 +1,14 @@
-import { access, mkdir, mkdtemp, rm, stat, utimes, writeFile } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -289,6 +299,95 @@ describe("Vault folders", () => {
     expect(result.created).toEqual(["Work"]);
     expect(result.renamed).toEqual(["Office"]);
     expect(result.deleted).toEqual([]);
+  });
+});
+
+describe("Vault attachments", () => {
+  it("writes image bytes once under a UUID name and keeps the original extension", async () => {
+    const paths = await ensureVault();
+    const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+
+    const saved = await withVault((vault) =>
+      vault.saveAttachment({
+        bytes,
+        name: "Cat Photo.PNG",
+        mimeType: "image/png",
+      }),
+    );
+
+    expect(saved.path).toMatch(
+      /^attachments\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.png$/,
+    );
+    expect(saved.name).toBe("Cat Photo.PNG");
+    expect(await readdir(paths.attachments)).toEqual([
+      saved.path.slice("attachments/".length),
+    ]);
+    expect(
+      new Uint8Array(await readFile(join(paths.root, saved.path))),
+    ).toEqual(bytes);
+  });
+
+  it("creates the attachments directory on demand", async () => {
+    const paths = await ensureVault();
+    await rm(paths.attachments, { recursive: true, force: true });
+
+    const saved = await withVault((vault) =>
+      vault.saveAttachment({
+        bytes: new Uint8Array([1, 2, 3]),
+        name: "screenshot.png",
+        mimeType: "image/png",
+      }),
+    );
+
+    expect((await stat(paths.attachments)).isDirectory()).toBe(true);
+    expect(await fileExists(join(paths.root, saved.path))).toBe(true);
+  });
+
+  it("infers the extension from the MIME type when the name has none", async () => {
+    await ensureVault();
+
+    const saved = await withVault((vault) =>
+      vault.saveAttachment({
+        bytes: new Uint8Array([1]),
+        name: "clipboard",
+        mimeType: "image/jpeg",
+      }),
+    );
+
+    expect(saved.path).toMatch(/\.jpg$/);
+    expect(saved.name).toBe("clipboard");
+  });
+
+  it("stores a dropped file's base name, not a path, as the default alt", async () => {
+    await ensureVault();
+
+    const saved = await withVault((vault) =>
+      vault.saveAttachment({
+        bytes: new Uint8Array([1]),
+        name: "/home/test/Pictures/garden.webp",
+        mimeType: "image/webp",
+      }),
+    );
+
+    expect(saved.path).toMatch(/^attachments\/.+\.webp$/);
+    expect(saved.name).toBe("garden.webp");
+  });
+
+  it("supports attachment writes in the in-memory adapter", async () => {
+    const saved = await Effect.runPromise(
+      Effect.gen(function* () {
+        const vault = yield* Vault;
+        yield* vault.ensure();
+        return yield* vault.saveAttachment({
+          bytes: new Uint8Array([4, 5, 6]),
+          name: "paste.png",
+          mimeType: "image/png",
+        });
+      }).pipe(Effect.provide(vaultMemoryLayer)),
+    );
+
+    expect(saved.path).toMatch(/^attachments\/.+\.png$/);
+    expect(saved.name).toBe("paste.png");
   });
 });
 
