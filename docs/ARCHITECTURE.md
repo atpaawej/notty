@@ -67,7 +67,7 @@ Adapters: the production client resolves the XDG vault and its `notty.db`; the m
 
 Interface: a `NoteEditor` React component that takes a note body and emits Markdown, plus image intake.
 
-Hides: TipTap, the extension set, ProseMirror node types, paste and drop handling, attachment writes.
+Hides: TipTap, the extension set, ProseMirror node types, paste and drop handling, native clipboard fallback, transient blob persistence, attachment writes.
 
 TipTap types must never appear outside this folder. See `docs/EDITOR.md`.
 

@@ -231,3 +231,26 @@ describe("NottyClient folders", () => {
     await expect(client.listFolders()).resolves.toEqual(["Office"]);
   });
 });
+
+describe("NottyClient attachments", () => {
+  it("round-trips a note body with a durable attachment reference", async () => {
+    const reference =
+      "attachments/3b1e7f0e-6a2d-4d1a-9a0e-1b2c3d4e5f60.png";
+    const body = `Before.\n\n![receipt.png](${reference})\n\nAfter.`;
+
+    const created = await client.createNote({ body });
+    expect(created.note.body).toBe(body);
+
+    const read = await client.readNote(created.note.id);
+    expect(read?.note.body).toBe(body);
+
+    const replaced = await client.replaceNoteBody(
+      created.note.id,
+      `![Screenshot](${reference})`,
+    );
+    expect(replaced.note.body).toBe(`![Screenshot](${reference})`);
+
+    const reloaded = await client.readNote(created.note.id);
+    expect(reloaded?.note.body).toBe(`![Screenshot](${reference})`);
+  });
+});
