@@ -130,6 +130,84 @@ body {
   color: var(--text-secondary);
 }
 
+.sidebar-heading-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-right: 4px;
+  margin-bottom: 4px;
+}
+
+.sidebar-heading-row .sidebar-heading {
+  margin-bottom: 0;
+}
+
+.sidebar-action {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.sidebar-action:hover {
+  background: var(--selection);
+  color: var(--text-primary);
+}
+
+.folder-form {
+  margin: 0 6px 4px;
+}
+
+.folder-form input {
+  width: 100%;
+  padding: 4px 7px;
+  border: 1px solid var(--accent);
+  border-radius: 5px;
+  background: var(--surface-list);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+}
+
+.sidebar-folder-actions {
+  display: flex;
+  gap: 4px;
+  margin: 0 6px 4px;
+}
+
+.sidebar-folder-actions button {
+  flex: 1;
+  padding: 3px 6px;
+  border: 1px solid var(--hairline);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.sidebar-folder-actions button:hover {
+  background: var(--selection);
+  color: var(--text-primary);
+}
+
+.folder-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
 .sidebar-item {
   display: flex;
   align-items: center;
@@ -327,6 +405,26 @@ body {
   flex-direction: column;
   overflow-y: auto;
   padding: 28px clamp(24px, 7vw, 84px) 64px;
+}
+
+.note-folder {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.note-folder select {
+  max-width: 22rem;
+  padding: 2px 6px;
+  border: 1px solid var(--hairline);
+  border-radius: 5px;
+  background: var(--surface-list);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 11px;
 }
 
 .note-title {
