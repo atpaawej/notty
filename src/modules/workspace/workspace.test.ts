@@ -1,6 +1,6 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readdir, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Effect } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -20,6 +20,24 @@ import {
  * in-memory index, which rebuilds from the note files on disk — the same path
  * a relaunch takes.
  */
+const listFolderTree = async (root: string): Promise<ReadonlyArray<string>> => {
+  const folders: string[] = [];
+  const walk = async (relative: string): Promise<void> => {
+    const entries = await readdir(join(root, relative), {
+      withFileTypes: true,
+    });
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
+      if (relative === "" && entry.name === "attachments") continue;
+      const child = relative === "" ? entry.name : `${relative}/${entry.name}`;
+      folders.push(child);
+      await walk(child);
+    }
+  };
+  await walk("");
+  return folders.sort((left, right) => left.localeCompare(right));
+};
+
 const makeStore = (root: string): NoteStore => {
   const run = <A>(
     action: (index: NoteIndexShape) => Effect.Effect<A, NoteIndexError>,
@@ -35,6 +53,20 @@ const makeStore = (root: string): NoteStore => {
     list: () => run((index) => index.list()),
     get: (id) => run((index) => index.get(id)),
     save: (note, folder) => run((index) => index.save(note, folder)),
+    listFolders: () => listFolderTree(root),
+    createFolder: async (folder) => {
+      await mkdir(join(root, folder), { recursive: true });
+    },
+    renameFolder: async (folder, nextFolder) => {
+      const target = join(root, nextFolder);
+      await mkdir(dirname(target), { recursive: true });
+      await rename(join(root, folder), target);
+      await run((index) => index.rebuild());
+    },
+    deleteFolder: async (folder) => {
+      await rm(join(root, folder), { recursive: true, force: true });
+      await run((index) => index.rebuild());
+    },
   };
 };
 
@@ -285,3 +317,132 @@ describe("selection", () => {
     expect((await store.get("note-1"))?.note.body).toBe("Unsaved when switching");
   });
 });
+
+const fileExists = async (path: string): Promise<boolean> => {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+describe("folders", () => {
+  it("creates and nests folders from the sidebar and restores them", async () => {
+    const workspace = createWorkspace(makeStore(vaultRoot), options());
+    await workspace.ready;
+
+    await workspace.createFolder("Work");
+    expect(workspace.getState().folders).toEqual(["Work"]);
+    expect(workspace.getState().selectedFolder).toBe("Work");
+
+    await workspace.createFolder("Projects");
+    expect(workspace.getState().folders).toEqual(["Work", "Work/Projects"]);
+    expect(workspace.getState().selectedFolder).toBe("Work/Projects");
+    expect(await fileExists(join(vaultRoot, "Work", "Projects"))).toBe(true);
+
+    await workspace.createNote();
+    workspace.setBody("Nested note");
+    await workspace.flush();
+    const id = workspace.getState().selectedId as string;
+    expect((await makeStore(vaultRoot).get(id))?.folder).toBe("Work/Projects");
+
+    const reopened = createWorkspace(makeStore(vaultRoot), options());
+    await reopened.ready;
+
+    expect(reopened.getState().folders).toEqual(["Work", "Work/Projects"]);
+    expect(reopened.getState().notes.find((note) => note.id === id)?.folder).toBe(
+      "Work/Projects",
+    );
+  });
+
+  it("moves a note between folders and back again", async () => {
+    const store = makeStore(vaultRoot);
+    const workspace = createWorkspace(store, options());
+    await workspace.ready;
+
+    await workspace.createNote();
+    workspace.setBody("Misfiled note");
+    await workspace.flush();
+    const id = workspace.getState().selectedId as string;
+
+    await workspace.createFolder("Work");
+    await workspace.moveNote(id, "Work");
+
+    expect(workspace.getState().notes.find((note) => note.id === id)?.folder).toBe(
+      "Work",
+    );
+    expect((await store.get(id))?.folder).toBe("Work");
+    expect(await fileExists(join(vaultRoot, "Work", `${id}.md`))).toBe(true);
+
+    await workspace.moveNote(id, "");
+    expect((await store.get(id))?.folder).toBe("");
+    expect(await fileExists(join(vaultRoot, `${id}.md`))).toBe(true);
+
+    await workspace.moveNote(id, "Work");
+    const reopened = createWorkspace(makeStore(vaultRoot), options());
+    await reopened.ready;
+    expect(reopened.getState().notes.find((note) => note.id === id)?.folder).toBe(
+      "Work",
+    );
+  });
+
+  it("renames a folder with its notes still inside", async () => {
+    const store = makeStore(vaultRoot);
+    const workspace = createWorkspace(store, options());
+    await workspace.ready;
+
+    await workspace.createFolder("Work");
+    await workspace.createNote();
+    workspace.setBody("Keep me");
+    await workspace.flush();
+    const id = workspace.getState().selectedId as string;
+
+    await workspace.renameFolder("Work", "Office");
+
+    expect(workspace.getState().folders).toEqual(["Office"]);
+    expect(workspace.getState().selectedFolder).toBe("Office");
+    expect(workspace.getState().notes.find((note) => note.id === id)?.folder).toBe(
+      "Office",
+    );
+    expect(await fileExists(join(vaultRoot, "Office", `${id}.md`))).toBe(true);
+    expect((await store.get(id))?.folder).toBe("Office");
+
+    const reopened = createWorkspace(makeStore(vaultRoot), options());
+    await reopened.ready;
+    expect(reopened.getState().folders).toEqual(["Office"]);
+    expect(reopened.getState().notes.find((note) => note.id === id)?.folder).toBe(
+      "Office",
+    );
+  });
+
+  it("deletes a folder, its notes and the index rows that pointed at it", async () => {
+    const store = makeStore(vaultRoot);
+    const workspace = createWorkspace(store, options());
+    await workspace.ready;
+
+    await workspace.createNote();
+    workspace.setBody("Keep this one");
+    await workspace.flush();
+    const kept = workspace.getState().selectedId as string;
+
+    await workspace.createFolder("Work");
+    await workspace.createNote();
+    workspace.setBody("Delete this one");
+    await workspace.flush();
+    const removed = workspace.getState().selectedId as string;
+
+    await workspace.deleteFolder("Work");
+
+    expect(workspace.getState().folders).toEqual([]);
+    expect(workspace.getState().notes.map((note) => note.id)).toEqual([kept]);
+    expect(await store.get(removed)).toBeNull();
+    expect(await fileExists(join(vaultRoot, "Work"))).toBe(false);
+    expect(await fileExists(join(vaultRoot, `${kept}.md`))).toBe(true);
+
+    const reopened = createWorkspace(makeStore(vaultRoot), options());
+    await reopened.ready;
+    expect(reopened.getState().notes.map((note) => note.id)).toEqual([kept]);
+  });
+});
+

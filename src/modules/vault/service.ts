@@ -69,6 +69,7 @@ export interface VaultFileSystem {
   readonly makeDirectory: (path: string) => Promise<void>;
   readonly readDirectory: (path: string) => Promise<ReadonlyArray<DirectoryEntry>>;
   readonly stat: (path: string) => Promise<VaultFileInfo>;
+  readonly rename: (from: string, to: string) => Promise<void>;
   readonly remove: (
     path: string,
     options?: { readonly recursive?: boolean },
@@ -81,6 +82,20 @@ export interface VaultShape {
   readonly location: () => Effect.Effect<VaultPaths, VaultError>;
   readonly ensure: () => Effect.Effect<void, VaultError>;
   readonly sweepTrash: (now?: Date) => Effect.Effect<number, VaultError>;
+  /**
+   * Every visible folder as a vault-relative POSIX path, sorted. Hidden
+   * directories and the attachments directory are not folders in the UI.
+   */
+  readonly listFolders: () => Effect.Effect<ReadonlyArray<string>, VaultError>;
+  /** Create a folder (and its parents). Returns the normalized path. */
+  readonly createFolder: (folder: string) => Effect.Effect<string, VaultError>;
+  /** Rename/move a folder subtree. Returns the normalized destination. */
+  readonly renameFolder: (
+    folder: string,
+    nextFolder: string,
+  ) => Effect.Effect<string, VaultError>;
+  /** Remove a folder and everything beneath it. */
+  readonly deleteFolder: (folder: string) => Effect.Effect<void, VaultError>;
 }
 
 export class Vault extends Context.Service<Vault, VaultShape>()("notty/Vault") {}

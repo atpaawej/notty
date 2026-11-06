@@ -18,6 +18,11 @@ export interface NoteStore {
   readonly list: () => Promise<ReadonlyArray<NoteSummary>>;
   readonly get: (id: string) => Promise<IndexedNote | null>;
   readonly save: (note: Note, folder: string) => Promise<IndexedNote>;
+  /** Every folder as a vault-relative POSIX path, sorted. */
+  readonly listFolders: () => Promise<ReadonlyArray<string>>;
+  readonly createFolder: (folder: string) => Promise<void>;
+  readonly renameFolder: (folder: string, nextFolder: string) => Promise<void>;
+  readonly deleteFolder: (folder: string) => Promise<void>;
 }
 
 /** The part of a note the editor displays. */
@@ -31,6 +36,10 @@ export interface EditorNote {
 export interface WorkspaceState {
   /** Note list, last touched first (pinned, then modified, then id). */
   readonly notes: ReadonlyArray<NoteSummary>;
+  /** Folder tree as vault-relative POSIX paths. */
+  readonly folders: ReadonlyArray<string>;
+  /** `null` means All Notes; otherwise an exact folder path. */
+  readonly selectedFolder: string | null;
   readonly selectedId: string | null;
   readonly selected: EditorNote | null;
   /** False while the initial list is still being read. */
@@ -56,6 +65,16 @@ export interface WorkspaceController {
   /** Create, show and save an empty note. Resolves before the first save. */
   readonly createNote: () => Promise<void>;
   readonly selectNote: (id: string) => Promise<void>;
+  /** Select a folder, or `null` for All Notes. */
+  readonly selectFolder: (folder: string | null) => void;
+  /** Create a folder (nested under the selection) and select it. */
+  readonly createFolder: (name: string) => Promise<void>;
+  /** Rename a folder in place, keeping its notes. */
+  readonly renameFolder: (folder: string, name: string) => Promise<void>;
+  /** Delete a folder and the notes beneath it. */
+  readonly deleteFolder: (folder: string) => Promise<void>;
+  /** Move a note into a folder; `""` is the vault root. */
+  readonly moveNote: (id: string, folder: string) => Promise<void>;
   /** Update the body; auto-title follows unless the title is user-owned. */
   readonly setBody: (markdown: string) => void;
   /** Take ownership of the title; auto-titling stops permanently. */
@@ -115,6 +134,44 @@ const withSummary = (
 ): ReadonlyArray<NoteSummary> =>
   sorted([...notes.filter((note) => note.id !== summary.id), summary]);
 
+const sortedFolders = (
+  folders: ReadonlyArray<string>,
+): ReadonlyArray<string> => [...folders].sort((left, right) => left.localeCompare(right));
+
+const parentOf = (folder: string): string => {
+  const slash = folder.lastIndexOf("/");
+  return slash < 0 ? "" : folder.slice(0, slash);
+};
+
+const isInside = (folder: string, parent: string): boolean =>
+  folder === parent || folder.startsWith(`${parent}/`);
+
+/**
+ * Sidebar-entered names are relative paths. Hidden segments are rejected so
+ * the filesystem tree and the sidebar tree cannot disagree.
+ */
+const folderSegments = (name: string): ReadonlyArray<string> | null => {
+  const trimmed = name.trim();
+  if (trimmed.length === 0 || trimmed.startsWith("/") || trimmed.includes("\\")) {
+    return null;
+  }
+  const segments = trimmed
+    .split("/")
+    .filter((segment) => segment.length > 0 && segment !== ".");
+  if (
+    segments.length === 0 ||
+    segments.some((segment) => segment === ".." || segment.startsWith("."))
+  ) {
+    return null;
+  }
+  return segments;
+};
+
+const remapFolder = (folder: string, from: string, to: string): string => {
+  if (folder === from) return to;
+  return folder.startsWith(`${from}/`) ? `${to}${folder.slice(from.length)}` : folder;
+};
+
 /**
  * The auto-title reads the body's opening words, not its Markdown syntax.
  * Only a bounded prefix is scanned so a very long note costs the same as a
@@ -156,6 +213,8 @@ export function createWorkspace(
 
   let state: WorkspaceState = {
     notes: [],
+    folders: [],
+    selectedFolder: null,
     selectedId: null,
     selected: null,
     ready: false,
@@ -249,10 +308,10 @@ export function createWorkspace(
     };
 
     draft = note;
-    draftFolder = "";
+    draftFolder = state.selectedFolder ?? "";
     update({
       ...state,
-      notes: withSummary(state.notes, summaryOf(note, "")),
+      notes: withSummary(state.notes, summaryOf(note, draftFolder)),
       selectedId: note.id,
       selected: editorNote(note),
       ready: true,
@@ -260,7 +319,7 @@ export function createWorkspace(
 
     // The note exists in the list before this write lands, so the first
     // keystroke has somewhere to go immediately.
-    enqueue({ note, folder: "" });
+    enqueue({ note, folder: draftFolder });
   };
 
   const selectNote = async (id: string): Promise<void> => {
@@ -279,6 +338,108 @@ export function createWorkspace(
       });
     } catch (cause) {
       console.warn("Notty could not open a note", cause);
+    }
+  };
+
+  const selectFolder = (folder: string | null): void => {
+    update({ ...state, selectedFolder: folder });
+  };
+
+  const createFolder = async (name: string): Promise<void> => {
+    const segments = folderSegments(name);
+    if (segments === null) return;
+    const relative = segments.join("/");
+    const folder =
+      state.selectedFolder === null
+        ? relative
+        : `${state.selectedFolder}/${relative}`;
+
+    try {
+      await store.createFolder(folder);
+      const folders = await store.listFolders();
+      update({ ...state, folders: sortedFolders(folders), selectedFolder: folder });
+    } catch (cause) {
+      console.warn("Notty could not create a folder", cause);
+    }
+  };
+
+  const renameFolder = async (folder: string, name: string): Promise<void> => {
+    const segments = folderSegments(name);
+    if (segments === null) return;
+    const parent = parentOf(folder);
+    const nextFolder = parent.length === 0
+      ? segments.join("/")
+      : `${parent}/${segments.join("/")}`;
+    if (nextFolder === folder) return;
+
+    // Folder operations move files, so any in-flight edit must land first.
+    await flush();
+    try {
+      await store.renameFolder(folder, nextFolder);
+      const [folders, notes] = await Promise.all([
+        store.listFolders(),
+        store.list(),
+      ]);
+      draftFolder = remapFolder(draftFolder, folder, nextFolder);
+      update({
+        ...state,
+        folders: sortedFolders(folders),
+        notes: sorted(notes),
+        selectedFolder:
+          state.selectedFolder === null
+            ? null
+            : remapFolder(state.selectedFolder, folder, nextFolder),
+      });
+    } catch (cause) {
+      console.warn("Notty could not rename a folder", cause);
+    }
+  };
+
+  const deleteFolder = async (folder: string): Promise<void> => {
+    await flush();
+    try {
+      await store.deleteFolder(folder);
+      const [folders, notes] = await Promise.all([
+        store.listFolders(),
+        store.list(),
+      ]);
+      const removedDraft = draft !== null && isInside(draftFolder, folder);
+      const removedSelection =
+        state.selectedFolder !== null && isInside(state.selectedFolder, folder);
+      if (removedDraft) {
+        draft = null;
+        draftFolder = "";
+      }
+      update({
+        ...state,
+        folders: sortedFolders(folders),
+        notes: sorted(notes),
+        selectedFolder: removedSelection
+          ? parentOf(folder) || null
+          : state.selectedFolder,
+        ...(removedDraft ? { selectedId: null, selected: null } : {}),
+      });
+    } catch (cause) {
+      console.warn("Notty could not delete a folder", cause);
+    }
+  };
+
+  const moveNote = async (id: string, folder: string): Promise<void> => {
+    await flush();
+    try {
+      const source = draft?.id === id ? draft : (await store.get(id))?.note;
+      if (source === undefined) return;
+      const saved = await store.save(source, folder);
+
+      if (draft?.id === id) {
+        draft = saved.note;
+        draftFolder = saved.folder;
+        show(saved.note);
+      } else {
+        update({ ...state, notes: sorted(await store.list()) });
+      }
+    } catch (cause) {
+      console.warn("Notty could not move a note", cause);
     }
   };
 
@@ -308,7 +469,13 @@ export function createWorkspace(
 
   const load = async (): Promise<void> => {
     try {
-      const loaded = sorted(await store.list());
+      const [summaries, folders] = await Promise.all([
+        store.list(),
+        store.listFolders(),
+      ]);
+      const loaded = sorted(summaries);
+      const folderList = sortedFolders(folders);
+
       if (draft !== null) {
         // The user created or opened a note while the list was loading.
         // Keep their selection and merge the optimistic list with disk.
@@ -319,12 +486,13 @@ export function createWorkspace(
             ...loaded.filter((note) => !known.has(note.id)),
             ...state.notes,
           ]),
+          folders: folderList,
           ready: true,
         });
         return;
       }
 
-      update({ ...state, notes: loaded, ready: true });
+      update({ ...state, notes: loaded, folders: folderList, ready: true });
 
       const first = loaded[0];
       if (first === undefined) return;
@@ -358,6 +526,11 @@ export function createWorkspace(
     ready,
     createNote,
     selectNote,
+    selectFolder,
+    createFolder,
+    renameFolder,
+    deleteFolder,
+    moveNote,
     setBody,
     setTitle,
     flush,

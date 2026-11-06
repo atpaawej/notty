@@ -11,11 +11,17 @@ import {
   type NoteIndexError,
   type NoteIndexShape,
 } from "./modules/note-index";
-import { vaultTauriLayer } from "./modules/vault";
+import {
+  Vault,
+  vaultTauriLayer,
+  type VaultError,
+  type VaultShape,
+} from "./modules/vault";
 import type { NoteStore } from "./modules/workspace";
 
-const indexLayer = noteIndexTauriLayer.pipe(Layer.provide(vaultTauriLayer));
-const runtime = ManagedRuntime.make(indexLayer);
+const vaultLayer = vaultTauriLayer;
+const indexLayer = noteIndexTauriLayer.pipe(Layer.provide(vaultLayer));
+const runtime = ManagedRuntime.make(Layer.merge(indexLayer, vaultLayer));
 
 const withIndex = <A>(
   run: (index: NoteIndexShape) => Effect.Effect<A, NoteIndexError>,
@@ -27,8 +33,44 @@ const withIndex = <A>(
     }),
   );
 
+const withVault = <A>(
+  run: (vault: VaultShape) => Effect.Effect<A, VaultError>,
+): Promise<A> =>
+  runtime.runPromise(
+    Effect.gen(function* () {
+      const vault = yield* Vault;
+      return yield* run(vault);
+    }),
+  );
+
+// A folder is a directory. Renaming or deleting one moves note files, so the
+// index is rebuilt afterwards and the files stay authoritative.
+const folderChanged = async (): Promise<void> => {
+  await withIndex((index) => index.rebuild());
+};
+
 export const noteStore: NoteStore = {
   list: () => withIndex((index) => index.list()),
   get: (id) => withIndex((index) => index.get(id)),
   save: (note, folder) => withIndex((index) => index.save(note, folder)),
+  listFolders: () =>
+    withVault((vault) =>
+      Effect.gen(function* () {
+        // On first launch the vault may not exist yet; listing must not race
+        // the index's own ensure.
+        yield* vault.ensure();
+        return yield* vault.listFolders();
+      }),
+    ),
+  createFolder: async (folder) => {
+    await withVault((vault) => vault.createFolder(folder));
+  },
+  renameFolder: async (folder, nextFolder) => {
+    await withVault((vault) => vault.renameFolder(folder, nextFolder));
+    await folderChanged();
+  },
+  deleteFolder: async (folder) => {
+    await withVault((vault) => vault.deleteFolder(folder));
+    await folderChanged();
+  },
 };

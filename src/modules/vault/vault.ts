@@ -20,6 +20,7 @@ export const TRASH_RETENTION_DAYS = 30;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const TRASH_RETENTION_MS = TRASH_RETENTION_DAYS * DAY_MS;
 const MARKDOWN_SUFFIX = ".md";
+const ATTACHMENTS_DIRECTORY = "attachments";
 
 interface WalkResult {
   readonly removed: number;
@@ -52,6 +53,134 @@ export const makeVault = (
       ]) {
         yield* attempt("ensure", path, () => fs.makeDirectory(path));
       }
+    });
+
+  /**
+   * Folders are vault-relative POSIX paths. The sidebar only shows folders
+   * that `listFolders` would list, so hidden names cannot be created here.
+   */
+  const normalizeFolder = (
+    operation: string,
+    folder: string,
+  ): Effect.Effect<string, VaultError> => {
+    const trimmed = folder.trim();
+    const segments = trimmed.split("/").filter((segment) => segment !== "" && segment !== ".");
+    if (
+      trimmed.length === 0 ||
+      trimmed.startsWith("/") ||
+      trimmed.includes("\\") ||
+      segments.length === 0 ||
+      segments.some((segment) => segment === ".." || segment.startsWith("."))
+    ) {
+      return Effect.fail(
+        new VaultError({
+          operation,
+          path: folder,
+          cause: new Error(`Folder must be a visible vault-relative POSIX path: ${folder}`),
+        }),
+      );
+    }
+    return Effect.succeed(segments.join("/"));
+  };
+
+  const absolutePath = (root: string, relativePath: string): string =>
+    relativePath.length === 0 ? root : `${root}/${relativePath}`;
+
+  const parentOf = (folder: string): string => {
+    const slash = folder.lastIndexOf("/");
+    return slash < 0 ? "" : folder.slice(0, slash);
+  };
+
+  const listFolders = (): Effect.Effect<ReadonlyArray<string>, VaultError> =>
+    Effect.gen(function* () {
+      const paths = yield* resolvePaths();
+      const folders: string[] = [];
+
+      const walk = (relative: string): Effect.Effect<void, VaultError> =>
+        Effect.gen(function* () {
+          const directory = absolutePath(paths.root, relative);
+          const entries = yield* attempt("listFolders", directory, () =>
+            fs.readDirectory(directory),
+          );
+          for (const entry of entries) {
+            if (!entry.isDirectory || entry.name.startsWith(".")) continue;
+            if (relative.length === 0 && entry.name === ATTACHMENTS_DIRECTORY) {
+              continue;
+            }
+            const child = relative.length === 0 ? entry.name : `${relative}/${entry.name}`;
+            folders.push(child);
+            yield* walk(child);
+          }
+        });
+
+      yield* walk("");
+      return folders.sort((left, right) => left.localeCompare(right));
+    });
+
+  const createFolder = (folder: string): Effect.Effect<string, VaultError> =>
+    Effect.gen(function* () {
+      const paths = yield* resolvePaths();
+      const normalized = yield* normalizeFolder("createFolder", folder);
+      const path = absolutePath(paths.root, normalized);
+      yield* attempt("createFolder", path, () => fs.makeDirectory(path));
+      return normalized;
+    });
+
+  const renameFolder = (
+    folder: string,
+    nextFolder: string,
+  ): Effect.Effect<string, VaultError> =>
+    Effect.gen(function* () {
+      const paths = yield* resolvePaths();
+      const sourceRelative = yield* normalizeFolder("renameFolder", folder);
+      const targetRelative = yield* normalizeFolder("renameFolder", nextFolder);
+      if (sourceRelative === targetRelative) return targetRelative;
+
+      const source = absolutePath(paths.root, sourceRelative);
+      const target = absolutePath(paths.root, targetRelative);
+
+      const info = yield* attempt("renameFolder", source, () => fs.stat(source));
+      if (!info.isDirectory) {
+        return yield* Effect.fail(
+          new VaultError({
+            operation: "renameFolder",
+            path: source,
+            cause: new Error(`Not a folder: ${source}`),
+          }),
+        );
+      }
+
+      const targetExists = yield* attempt("renameFolder", target, () =>
+        fs.exists(target),
+      );
+      if (targetExists) {
+        return yield* Effect.fail(
+          new VaultError({
+            operation: "renameFolder",
+            path: target,
+            cause: new Error(`Folder already exists: ${target}`),
+          }),
+        );
+      }
+
+      const parent = parentOf(targetRelative);
+      if (parent.length > 0) {
+        yield* attempt("renameFolder", absolutePath(paths.root, parent), () =>
+          fs.makeDirectory(absolutePath(paths.root, parent)),
+        );
+      }
+      yield* attempt("renameFolder", source, () => fs.rename(source, target));
+      return targetRelative;
+    });
+
+  const deleteFolder = (folder: string): Effect.Effect<void, VaultError> =>
+    Effect.gen(function* () {
+      const paths = yield* resolvePaths();
+      const normalized = yield* normalizeFolder("deleteFolder", folder);
+      const path = absolutePath(paths.root, normalized);
+      yield* attempt("deleteFolder", path, () =>
+        fs.remove(path, { recursive: true }),
+      );
     });
 
   const sweepDirectory = (
@@ -119,5 +248,9 @@ export const makeVault = (
     location: resolvePaths,
     ensure,
     sweepTrash,
+    listFolders,
+    createFolder,
+    renameFolder,
+    deleteFolder,
   };
 };
