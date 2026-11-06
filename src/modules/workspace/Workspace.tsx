@@ -142,7 +142,7 @@ function ActionMenu({
     const rect = trigger.current?.getBoundingClientRect();
     if (rect === undefined) return;
     setPosition({
-      top: Math.min(rect.bottom + 4, window.innerHeight - 172),
+      top: Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - 172)),
       right: Math.max(8, window.innerWidth - rect.right),
     });
   };
