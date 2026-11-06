@@ -6,9 +6,9 @@
  * and no DOM are involved.
  */
 import { MarkdownManager } from "@tiptap/markdown";
-import StarterKit from "@tiptap/starter-kit";
+import { editorExtensions } from "./extensions";
 
-const manager = new MarkdownManager({ extensions: [StarterKit] });
+const manager = new MarkdownManager({ extensions: [...editorExtensions] });
 
 /**
  * Parse Markdown into the editor's document model and serialize it straight
