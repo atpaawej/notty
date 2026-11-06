@@ -70,7 +70,10 @@ jobs:
           fi
           DIST="notty-${TAG}-linux-x86_64"
           mkdir -p "$DIST"
-          cp src-tauri/target/release/notty "$DIST/"
+          cp src-tauri/target/release/notty-desktop "$DIST/"
+          if [ -f "dist-cli/notty.js" ]; then
+            cp dist-cli/notty.js "$DIST/notty"
+          fi
           if [ -d "src-tauri/icons" ]; then
             cp -r src-tauri/icons "$DIST/"
           fi
