@@ -15,7 +15,10 @@ import type {
 
 /** The persistence surface the workspace needs. */
 export interface NoteStore {
-  readonly list: () => Promise<ReadonlyArray<NoteSummary>>;
+  readonly list: (options?: {
+    /** Include notes hidden from the normal list by the Archive flag. */
+    readonly includeArchived?: boolean;
+  }) => Promise<ReadonlyArray<NoteSummary>>;
   readonly get: (id: string) => Promise<IndexedNote | null>;
   readonly save: (note: Note, folder: string) => Promise<IndexedNote>;
   /** Every folder as a vault-relative POSIX path, sorted. */
@@ -40,6 +43,8 @@ export interface WorkspaceState {
   readonly folders: ReadonlyArray<string>;
   /** `null` means All Notes; otherwise an exact folder path. */
   readonly selectedFolder: string | null;
+  /** True while the note list shows archived notes instead of active ones. */
+  readonly showArchived: boolean;
   readonly selectedId: string | null;
   readonly selected: EditorNote | null;
   /** False while the initial list is still being read. */
@@ -67,6 +72,14 @@ export interface WorkspaceController {
   readonly selectNote: (id: string) => Promise<void>;
   /** Select a folder, or `null` for All Notes. */
   readonly selectFolder: (folder: string | null) => void;
+  /** Show archived notes; the normal list hides them. */
+  readonly selectArchive: () => void;
+  /** Pin or unpin a note with one action. */
+  readonly togglePin: (id: string) => Promise<void>;
+  /** Hide a note from the normal list, or bring it back. */
+  readonly setArchived: (id: string, archived: boolean) => Promise<void>;
+  /** Copy a note into the same folder with a new identity and timestamps. */
+  readonly duplicateNote: (id: string) => Promise<void>;
   /** Create a folder (nested under the selection) and select it. */
   readonly createFolder: (name: string) => Promise<void>;
   /** Rename a folder in place, keeping its notes. */
@@ -215,6 +228,7 @@ export function createWorkspace(
     notes: [],
     folders: [],
     selectedFolder: null,
+    showArchived: false,
     selectedId: null,
     selected: null,
     ready: false,
@@ -248,6 +262,29 @@ export function createWorkspace(
       notes: withSummary(state.notes, summaryOf(note, draftFolder)),
       selectedId: note.id,
       selected: editorNote(note),
+    });
+  };
+
+  /** The draft is authoritative while it is open; otherwise read from disk. */
+  const currentNote = async (id: string): Promise<IndexedNote | null> => {
+    if (draft !== null && draft.id === id) {
+      return { note: draft, folder: draftFolder };
+    }
+    return store.get(id);
+  };
+
+  const applySaved = (saved: IndexedNote): void => {
+    const isDraft = draft !== null && draft.id === saved.note.id;
+    if (isDraft) {
+      draft = saved.note;
+      draftFolder = saved.folder;
+    }
+    update({
+      ...state,
+      notes: withSummary(state.notes, summaryOf(saved.note, saved.folder)),
+      ...(isDraft
+        ? { selectedId: saved.note.id, selected: editorNote(saved.note) }
+        : {}),
     });
   };
 
@@ -314,6 +351,7 @@ export function createWorkspace(
       notes: withSummary(state.notes, summaryOf(note, draftFolder)),
       selectedId: note.id,
       selected: editorNote(note),
+      showArchived: false,
       ready: true,
     });
 
@@ -342,7 +380,88 @@ export function createWorkspace(
   };
 
   const selectFolder = (folder: string | null): void => {
-    update({ ...state, selectedFolder: folder });
+    update({ ...state, selectedFolder: folder, showArchived: false });
+  };
+
+  const selectArchive = (): void => {
+    update({ ...state, selectedFolder: null, showArchived: true });
+  };
+
+  const togglePin = async (id: string): Promise<void> => {
+    await flush();
+    try {
+      const found = await currentNote(id);
+      if (found === null) return;
+      const saved = await store.save(
+        { ...found.note, pinned: !found.note.pinned },
+        found.folder,
+      );
+      applySaved(saved);
+    } catch (cause) {
+      console.warn("Notty could not pin a note", cause);
+    }
+  };
+
+  const setArchived = async (id: string, archived: boolean): Promise<void> => {
+    await flush();
+    try {
+      const found = await currentNote(id);
+      if (found === null || found.note.archived === archived) return;
+      const saved = await store.save(
+        { ...found.note, archived },
+        found.folder,
+      );
+
+      // Archive and Unarchive both remove the note from the list the user is
+      // looking at, so an open editor for it must close in step.
+      const deselect =
+        state.selectedId === id && archived !== state.showArchived;
+      if (deselect) {
+        draft = null;
+        draftFolder = "";
+      }
+      update({
+        ...state,
+        notes: withSummary(state.notes, summaryOf(saved.note, saved.folder)),
+        ...(deselect ? { selectedId: null, selected: null } : {}),
+      });
+    } catch (cause) {
+      console.warn("Notty could not archive a note", cause);
+    }
+  };
+
+  const duplicateNote = async (id: string): Promise<void> => {
+    await flush();
+    try {
+      const found = await currentNote(id);
+      if (found === null) return;
+
+      const createdAt = now().toISOString();
+      const copy: Note = {
+        id: newId(),
+        title: found.note.title,
+        created: createdAt,
+        modified: createdAt,
+        pinned: false,
+        archived: false,
+        ...(found.note.titleLocked === true ? { titleLocked: true } : {}),
+        body: found.note.body,
+        ...(found.note.extra === undefined ? {} : { extra: found.note.extra }),
+      };
+
+      draft = copy;
+      draftFolder = found.folder;
+      update({
+        ...state,
+        notes: withSummary(state.notes, summaryOf(copy, found.folder)),
+        showArchived: false,
+        selectedId: copy.id,
+        selected: editorNote(copy),
+      });
+      enqueue({ note: copy, folder: found.folder });
+    } catch (cause) {
+      console.warn("Notty could not duplicate a note", cause);
+    }
   };
 
   const createFolder = async (name: string): Promise<void> => {
@@ -470,7 +589,7 @@ export function createWorkspace(
   const load = async (): Promise<void> => {
     try {
       const [summaries, folders] = await Promise.all([
-        store.list(),
+        store.list({ includeArchived: true }),
         store.listFolders(),
       ]);
       const loaded = sorted(summaries);
@@ -494,7 +613,9 @@ export function createWorkspace(
 
       update({ ...state, notes: loaded, folders: folderList, ready: true });
 
-      const first = loaded[0];
+      const first = loaded.find((note) =>
+        state.showArchived ? note.archived : !note.archived,
+      );
       if (first === undefined) return;
       const found = await store.get(first.id);
       if (found === null) return;
@@ -527,6 +648,10 @@ export function createWorkspace(
     createNote,
     selectNote,
     selectFolder,
+    selectArchive,
+    togglePin,
+    setArchived,
+    duplicateNote,
     createFolder,
     renameFolder,
     deleteFolder,
