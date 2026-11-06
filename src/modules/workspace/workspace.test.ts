@@ -375,28 +375,25 @@ describe("pin, archive and duplicate", () => {
 
     expect(workspace.getState().selectedId).toBeNull();
     expect(workspace.getState().selected).toBeNull();
-    expect(workspace.getState().notes.find((note) => note.id === id)?.archived).toBe(
-      true,
-    );
+    expect(workspace.getState().notes).toEqual([]);
     expect((await store.get(id))?.note.body).toBe("Keep me safe");
     expect((await store.get(id))?.note.archived).toBe(true);
 
     const reopened = createWorkspace(makeStore(vaultRoot), options());
     await reopened.ready;
     expect(reopened.getState().selectedId).toBeNull();
-    expect(reopened.getState().notes.find((note) => note.id === id)?.archived).toBe(
-      true,
-    );
+    expect(reopened.getState().notes).toEqual([]);
 
     reopened.selectArchive();
     expect(reopened.getState().showArchived).toBe(true);
+    expect(reopened.getState().notes.map((note) => note.id)).toEqual([id]);
     await reopened.selectNote(id);
     expect(reopened.getState().selected?.body).toBe("Keep me safe");
 
     await reopened.setArchived(id, false);
-    expect(reopened.getState().notes.find((note) => note.id === id)?.archived).toBe(
-      false,
-    );
+    expect(reopened.getState().notes).toEqual([]);
+    reopened.selectFolder(null);
+    expect(reopened.getState().notes.map((note) => note.id)).toEqual([id]);
     expect((await store.get(id))?.note.archived).toBe(false);
     await reopened.flush();
   });

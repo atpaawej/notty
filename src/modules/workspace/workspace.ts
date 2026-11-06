@@ -151,6 +151,19 @@ const sortedFolders = (
   folders: ReadonlyArray<string>,
 ): ReadonlyArray<string> => [...folders].sort((left, right) => left.localeCompare(right));
 
+/** The notes the current view shows: one folder or all, active or archived. */
+const viewOf = (
+  notes: ReadonlyArray<NoteSummary>,
+  selectedFolder: string | null,
+  showArchived: boolean,
+): ReadonlyArray<NoteSummary> =>
+  notes.filter((note) =>
+    showArchived
+      ? note.archived
+      : !note.archived &&
+        (selectedFolder === null || note.folder === selectedFolder),
+  );
+
 const parentOf = (folder: string): string => {
   const slash = folder.lastIndexOf("/");
   return slash < 0 ? "" : folder.slice(0, slash);
@@ -233,6 +246,8 @@ export function createWorkspace(
     selected: null,
     ready: false,
   };
+  /** Every known note, including archived and other folders. */
+  let allNotes: ReadonlyArray<NoteSummary> = [];
 
   const listeners = new Set<() => void>();
   let draft: Note | null = null;
@@ -257,9 +272,10 @@ export function createWorkspace(
 
   const show = (note: Note): void => {
     draft = note;
+    allNotes = withSummary(allNotes, summaryOf(note, draftFolder));
     update({
       ...state,
-      notes: withSummary(state.notes, summaryOf(note, draftFolder)),
+      notes: viewOf(allNotes, state.selectedFolder, state.showArchived),
       selectedId: note.id,
       selected: editorNote(note),
     });
@@ -279,9 +295,10 @@ export function createWorkspace(
       draft = saved.note;
       draftFolder = saved.folder;
     }
+    allNotes = withSummary(allNotes, summaryOf(saved.note, saved.folder));
     update({
       ...state,
-      notes: withSummary(state.notes, summaryOf(saved.note, saved.folder)),
+      notes: viewOf(allNotes, state.selectedFolder, state.showArchived),
       ...(isDraft
         ? { selectedId: saved.note.id, selected: editorNote(saved.note) }
         : {}),
@@ -346,9 +363,10 @@ export function createWorkspace(
 
     draft = note;
     draftFolder = state.selectedFolder ?? "";
+    allNotes = withSummary(allNotes, summaryOf(note, draftFolder));
     update({
       ...state,
-      notes: withSummary(state.notes, summaryOf(note, draftFolder)),
+      notes: viewOf(allNotes, state.selectedFolder, false),
       selectedId: note.id,
       selected: editorNote(note),
       showArchived: false,
@@ -380,11 +398,21 @@ export function createWorkspace(
   };
 
   const selectFolder = (folder: string | null): void => {
-    update({ ...state, selectedFolder: folder, showArchived: false });
+    update({
+      ...state,
+      selectedFolder: folder,
+      showArchived: false,
+      notes: viewOf(allNotes, folder, false),
+    });
   };
 
   const selectArchive = (): void => {
-    update({ ...state, selectedFolder: null, showArchived: true });
+    update({
+      ...state,
+      selectedFolder: null,
+      showArchived: true,
+      notes: viewOf(allNotes, null, true),
+    });
   };
 
   const togglePin = async (id: string): Promise<void> => {
@@ -420,9 +448,10 @@ export function createWorkspace(
         draft = null;
         draftFolder = "";
       }
+      allNotes = withSummary(allNotes, summaryOf(saved.note, saved.folder));
       update({
         ...state,
-        notes: withSummary(state.notes, summaryOf(saved.note, saved.folder)),
+        notes: viewOf(allNotes, state.selectedFolder, state.showArchived),
         ...(deselect ? { selectedId: null, selected: null } : {}),
       });
     } catch (cause) {
@@ -451,14 +480,16 @@ export function createWorkspace(
 
       draft = copy;
       draftFolder = found.folder;
+      allNotes = withSummary(allNotes, summaryOf(copy, found.folder));
       update({
         ...state,
-        notes: withSummary(state.notes, summaryOf(copy, found.folder)),
+        notes: viewOf(allNotes, state.selectedFolder, false),
         showArchived: false,
         selectedId: copy.id,
         selected: editorNote(copy),
       });
       enqueue({ note: copy, folder: found.folder });
+      await flush();
     } catch (cause) {
       console.warn("Notty could not duplicate a note", cause);
     }
@@ -497,17 +528,19 @@ export function createWorkspace(
       await store.renameFolder(folder, nextFolder);
       const [folders, notes] = await Promise.all([
         store.listFolders(),
-        store.list(),
+        store.list({ includeArchived: true }),
       ]);
+      const selectedFolder =
+        state.selectedFolder === null
+          ? null
+          : remapFolder(state.selectedFolder, folder, nextFolder);
       draftFolder = remapFolder(draftFolder, folder, nextFolder);
+      allNotes = sorted(notes);
       update({
         ...state,
         folders: sortedFolders(folders),
-        notes: sorted(notes),
-        selectedFolder:
-          state.selectedFolder === null
-            ? null
-            : remapFolder(state.selectedFolder, folder, nextFolder),
+        notes: viewOf(allNotes, selectedFolder, state.showArchived),
+        selectedFolder,
       });
     } catch (cause) {
       console.warn("Notty could not rename a folder", cause);
@@ -520,7 +553,7 @@ export function createWorkspace(
       await store.deleteFolder(folder);
       const [folders, notes] = await Promise.all([
         store.listFolders(),
-        store.list(),
+        store.list({ includeArchived: true }),
       ]);
       const removedDraft = draft !== null && isInside(draftFolder, folder);
       const removedSelection =
@@ -529,13 +562,15 @@ export function createWorkspace(
         draft = null;
         draftFolder = "";
       }
+      const selectedFolder = removedSelection
+        ? parentOf(folder) || null
+        : state.selectedFolder;
+      allNotes = sorted(notes);
       update({
         ...state,
         folders: sortedFolders(folders),
-        notes: sorted(notes),
-        selectedFolder: removedSelection
-          ? parentOf(folder) || null
-          : state.selectedFolder,
+        notes: viewOf(allNotes, selectedFolder, state.showArchived),
+        selectedFolder,
         ...(removedDraft ? { selectedId: null, selected: null } : {}),
       });
     } catch (cause) {
@@ -555,7 +590,11 @@ export function createWorkspace(
         draftFolder = saved.folder;
         show(saved.note);
       } else {
-        update({ ...state, notes: sorted(await store.list()) });
+        allNotes = sorted(await store.list({ includeArchived: true }));
+        update({
+          ...state,
+          notes: viewOf(allNotes, state.selectedFolder, state.showArchived),
+        });
       }
     } catch (cause) {
       console.warn("Notty could not move a note", cause);
@@ -598,24 +637,29 @@ export function createWorkspace(
       if (draft !== null) {
         // The user created or opened a note while the list was loading.
         // Keep their selection and merge the optimistic list with disk.
-        const known = new Set(state.notes.map((note) => note.id));
+        const known = new Set(allNotes.map((note) => note.id));
+        allNotes = sorted([
+          ...loaded.filter((note) => !known.has(note.id)),
+          ...allNotes,
+        ]);
         update({
           ...state,
-          notes: sorted([
-            ...loaded.filter((note) => !known.has(note.id)),
-            ...state.notes,
-          ]),
+          notes: viewOf(allNotes, state.selectedFolder, state.showArchived),
           folders: folderList,
           ready: true,
         });
         return;
       }
 
-      update({ ...state, notes: loaded, folders: folderList, ready: true });
-
-      const first = loaded.find((note) =>
-        state.showArchived ? note.archived : !note.archived,
+      allNotes = loaded;
+      const displayed = viewOf(
+        allNotes,
+        state.selectedFolder,
+        state.showArchived,
       );
+      update({ ...state, notes: displayed, folders: folderList, ready: true });
+
+      const first = displayed[0];
       if (first === undefined) return;
       const found = await store.get(first.id);
       if (found === null) return;
