@@ -6,7 +6,7 @@ TipTap (ProseMirror) wrapped behind the `editor` module. Nothing outside `src/mo
 
 **Check the current TipTap documentation first.** TipTap moves quickly and training data goes stale. Choose extensions, APIs, and patterns from the current docs, not from memory. Record the version chosen when the editor module is added.
 
-Chosen for the capture ticket: TipTap **3.32.3** (`@tiptap/react`, `@tiptap/starter-kit`, `@tiptap/markdown`, `@tiptap/pm`). Checklists use `TaskList` + `TaskItem` from `@tiptap/extension-list`; tables use `TableKit` from `@tiptap/extension-table`. StarterKit supplies text, bold, italic, headings and ordered/unordered lists; the Markdown extension supplies `contentType: "markdown"` on input and `editor.getMarkdown()` on output, and its manager is the pure parse/serialize path tested without React.
+Chosen for the capture ticket: TipTap **3.32.3** (`@tiptap/react`, `@tiptap/starter-kit`, `@tiptap/markdown`, `@tiptap/pm`). Checklists use `TaskList` + `TaskItem` from `@tiptap/extension-list`; tables use `TableKit` from `@tiptap/extension-table`; images use `@tiptap/extension-image` with base64 parsing disabled. StarterKit supplies text, bold, italic, headings and ordered/unordered lists; the Markdown extension supplies `contentType: "markdown"` on input and `editor.getMarkdown()` on output, and its manager is the pure parse/serialize path tested without React.
 
 The running editor and the pure Markdown manager share one extension set (`extensions.ts`), so a round-trip test exercises the same schema a saved note uses.
 
@@ -37,7 +37,9 @@ No ProseMirror editor instance escapes the module. No caller may read editor int
 
 - Paste and drop are the only intake paths in v1.
 - Writes go through the vault module; the editor does not decide where attachments live.
-- Alt text defaults to the filename and is editable.
+- The editor receives the resulting relative reference and inserts it as an image node. Markdown keeps that reference; only HTML rendering maps it to a webview URL through a resolver supplied by the composition root.
+- Base64 parsing is disabled, so an inline image payload can never enter a note through the editor.
+- Alt text defaults to the original filename and is edited from the toolbar while an image is selected.
 - No resizing, no cropping, no lightbox in v1.
 
 ## Auto-save interaction
