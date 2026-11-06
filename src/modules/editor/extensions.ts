@@ -7,12 +7,29 @@
  * already owns both directions.
  */
 import { TaskItem, TaskList } from "@tiptap/extension-list";
-import { TableKit } from "@tiptap/extension-table";
+import {
+  Table,
+  TableKit,
+  renderTableToMarkdown,
+} from "@tiptap/extension-table";
 import StarterKit from "@tiptap/starter-kit";
+
+/**
+ * The stock table renderer adds its own leading and trailing newlines. The
+ * Markdown manager already separates block nodes, so those extra lines turn
+ * into empty paragraphs — and two adjacent tables drift further apart on every
+ * save. Trim them here so table output is a normal block.
+ */
+const MarkdownTable = Table.extend({
+  renderMarkdown(node, helpers) {
+    return renderTableToMarkdown(node, helpers).trim();
+  },
+});
 
 export const editorExtensions = [
   StarterKit,
   TaskList,
   TaskItem,
-  TableKit,
+  TableKit.configure({ table: false }),
+  MarkdownTable,
 ] as const;

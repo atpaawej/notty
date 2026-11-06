@@ -108,6 +108,18 @@ describe("Table round-trip", () => {
     expect(saved).toContain("*cold*");
     expect(normalizeMarkdown(saved)).toBe(saved);
   });
+
+  it("keeps adjacent tables from drifting apart", () => {
+    const adjacent = [table, "", "| Name | Note |", "| --- | --- |", "| Tea | hot |"].join(
+      "\n",
+    );
+    const saved = normalizeMarkdown(adjacent);
+
+    expect(saved).toContain("| Milk | 2");
+    expect(saved).toMatch(/\| Tea\s+\| hot\s+\|/);
+    expect(normalizeMarkdown(saved)).toBe(saved);
+    expect(normalizeMarkdown(normalizeMarkdown(saved))).toBe(saved);
+  });
 });
 
 describe("Checklist and table together", () => {
