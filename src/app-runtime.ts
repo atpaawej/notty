@@ -23,6 +23,12 @@ import {
   type NoteIndexShape,
 } from "./modules/note-index";
 import {
+  createUpdater,
+  UpdaterSeam,
+  updaterTauriLayer,
+  type UpdaterController,
+} from "./modules/updater";
+import {
   Vault,
   vaultTauriLayer,
   type VaultError,
@@ -35,6 +41,7 @@ const vaultLayer = vaultTauriLayer;
 const indexLayer = noteIndexTauriLayer.pipe(Layer.provide(vaultLayer));
 const runtime = ManagedRuntime.make(Layer.merge(indexLayer, vaultLayer));
 const hotkeyRuntime = ManagedRuntime.make(hotkeyTauriLayer);
+const updaterRuntime = ManagedRuntime.make(updaterTauriLayer);
 
 const withIndex = <A>(
   run: (index: NoteIndexShape) => Effect.Effect<A, NoteIndexError>,
@@ -136,6 +143,7 @@ export interface AppRuntime {
   readonly store: NoteStore;
   readonly attachments: WorkspaceAttachments;
   readonly hotkey: HotkeyController;
+  readonly updater: UpdaterController;
 }
 
 export const initializeRuntime = async (): Promise<AppRuntime> => {
@@ -167,5 +175,18 @@ export const initializeRuntime = async (): Promise<AppRuntime> => {
   );
   await hotkey.ready;
 
-  return { store: noteStore, attachments, hotkey };
+  // Update work starts after the window can accept input. The first check is
+  // deliberately delayed so it never competes with capture.
+  const updaterSeam = await updaterRuntime.runPromise(
+    Effect.gen(function* () {
+      return yield* UpdaterSeam;
+    }),
+  );
+  const updater = createUpdater(updaterSeam, {
+    autoCheck: true,
+    autoDownload: true,
+    initialDelayMs: 8_000,
+  });
+
+  return { store: noteStore, attachments, hotkey, updater };
 };

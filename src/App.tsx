@@ -13,6 +13,7 @@ import {
 } from "react";
 import type { AppRuntime } from "./app-runtime";
 import { HotkeySettingsDialog } from "./modules/hotkey";
+import { UpdateBanner } from "./modules/updater";
 import { Workspace, type WorkspaceController } from "./modules/workspace";
 import "./styles.css";
 
@@ -23,6 +24,11 @@ export default function App({ runtime }: { readonly runtime: AppRuntime }) {
     runtime.hotkey.subscribe,
     runtime.hotkey.getState,
     runtime.hotkey.getState,
+  );
+  const update = useSyncExternalStore(
+    runtime.updater.subscribe,
+    runtime.updater.getState,
+    runtime.updater.getState,
   );
 
   const onController = useCallback((next: WorkspaceController | null) => {
@@ -70,6 +76,24 @@ export default function App({ runtime }: { readonly runtime: AppRuntime }) {
         onController={onController}
         onOpenSettings={() => setSettingsOpen(true)}
         hotkeyError={hotkey.error !== null}
+      />
+      <UpdateBanner
+        state={update}
+        release={runtime.updater.getRelease()}
+        dismissed={runtime.updater.isDismissed()}
+        onDownload={() => {
+          void runtime.updater.downloadAndStage();
+        }}
+        onRestart={() => {
+          // Flush the open note and its debounced auto-save before the
+          // process is replaced. The controller keeps the window alive if
+          // either the flush or the restart fails.
+          void controller.current?.flush().then(() => runtime.updater.restart());
+        }}
+        onDismiss={runtime.updater.dismiss}
+        onRetry={() => {
+          void runtime.updater.check({ manual: true });
+        }}
       />
       {settingsOpen ? (
         <HotkeySettingsDialog

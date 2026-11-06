@@ -65,3 +65,7 @@ _Avoid_: persist, sync, commit
 **Welcome notes**:
 The one-time seeded notes created on very first launch to demonstrate the editor and folder model. Never recreated after the first run.
 _Avoid_: onboarding, samples, demo data
+
+**Update**:
+A newer published Notty release, staged in user space and applied on restart. A read-only system install shows a release link instead.
+_Avoid_: upgrade, patch, hotfix
