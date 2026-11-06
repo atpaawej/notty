@@ -28,9 +28,9 @@ Each folder exposes only `index.ts`. Anything else in the folder is private.
 
 ### vault
 
-Interface: resolve the vault location, ensure it exists, expose the attachments directory, sweep expired Trash on startup.
+Interface: resolve the vault location, ensure it exists, expose the attachments directory, list/create/rename/delete folders, sweep expired Trash on startup.
 
-Hides: XDG path resolution, directory creation, the `.notty/` metadata folder, Trash retention, first-run seeding flags.
+Hides: XDG path resolution, directory creation, folder path validation, the `.notty/` metadata folder, Trash retention, first-run seeding flags.
 
 Dependency category: local-substitutable. Tests run against a temporary directory, never the real home directory.
 
@@ -62,9 +62,9 @@ TipTap types must never appear outside this folder. See `docs/EDITOR.md`.
 
 ### workspace
 
-Interface: the three-column shell — selected folder, selected note, and the commands that change them.
+Interface: the three-column shell — selected folder, selected note, and the commands that change them, including folder create/rename/delete and moving a note.
 
-Hides: sidebar and note-list rendering, keyboard shortcuts, optimistic updates, auto-save scheduling.
+Hides: sidebar and note-list rendering, folder-tree indentation, keyboard shortcuts, optimistic updates, auto-save scheduling.
 
 ## Seams
 
