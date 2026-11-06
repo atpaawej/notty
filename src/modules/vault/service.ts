@@ -115,6 +115,13 @@ export interface VaultShape {
   /** Remove a folder and everything beneath it. */
   readonly deleteFolder: (folder: string) => Effect.Effect<void, VaultError>;
   /**
+   * True until the one-time welcome notes have been seeded. The marker lives
+   * in `.notty/`, never among the user's files.
+   */
+  readonly hasSeededWelcomeNotes: () => Effect.Effect<boolean, VaultError>;
+  /** Record that welcome notes were seeded. Later runs never seed again. */
+  readonly markWelcomeNotesSeeded: () => Effect.Effect<void, VaultError>;
+  /**
    * Write image bytes to the vault-level attachments directory under a UUID
    * filename. The returned path is what a note body references.
    */

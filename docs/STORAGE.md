@@ -13,6 +13,8 @@ The vault is the user's data. Everything else in Notty is rebuildable.
     <note>.md
 ```
 
+The `.notty/` folder holds the first-run marker for the welcome notes. It is invisible in the sidebar and never holds a note.
+
 The vault is created on first launch at the XDG data location. The user is never prompted to choose a path and never needs to know it exists.
 
 ## Note file format

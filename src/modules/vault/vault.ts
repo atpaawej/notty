@@ -23,6 +23,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const TRASH_RETENTION_MS = TRASH_RETENTION_DAYS * DAY_MS;
 const MARKDOWN_SUFFIX = ".md";
 const ATTACHMENTS_DIRECTORY = "attachments";
+/** Internal marker; deleting it would let the welcome notes return. */
+const WELCOME_SEED_MARKER = "welcome-notes-seeded";
 const MAX_EXTENSION_LENGTH = 12;
 
 /** Extensions used when a pasted blob has no filename to borrow one from. */
@@ -288,6 +290,27 @@ export const makeVault = (
       return result.removed;
     });
 
+  const hasSeededWelcomeNotes = (): Effect.Effect<boolean, VaultError> =>
+    Effect.gen(function* () {
+      const paths = yield* resolvePaths();
+      const marker = joinVaultPath(paths.internal, WELCOME_SEED_MARKER);
+      return yield* attempt("hasSeededWelcomeNotes", marker, () =>
+        fs.exists(marker),
+      );
+    });
+
+  const markWelcomeNotesSeeded = (): Effect.Effect<void, VaultError> =>
+    Effect.gen(function* () {
+      const paths = yield* resolvePaths();
+      const marker = joinVaultPath(paths.internal, WELCOME_SEED_MARKER);
+      yield* attempt("markWelcomeNotesSeeded", paths.internal, () =>
+        fs.makeDirectory(paths.internal),
+      );
+      yield* attempt("markWelcomeNotesSeeded", marker, () =>
+        fs.writeFile(marker, new TextEncoder().encode("1\n")),
+      );
+    });
+
   const saveAttachment = (
     upload: AttachmentUpload,
   ): Effect.Effect<Attachment, VaultError> =>
@@ -321,6 +344,8 @@ export const makeVault = (
     createFolder,
     renameFolder,
     deleteFolder,
+    hasSeededWelcomeNotes,
+    markWelcomeNotesSeeded,
     saveAttachment,
   };
 };
