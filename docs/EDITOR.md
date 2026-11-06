@@ -6,7 +6,9 @@ TipTap (ProseMirror) wrapped behind the `editor` module. Nothing outside `src/mo
 
 **Check the current TipTap documentation first.** TipTap moves quickly and training data goes stale. Choose extensions, APIs, and patterns from the current docs, not from memory. Record the version chosen when the editor module is added.
 
-Chosen for the capture ticket: TipTap **3.32.3** (`@tiptap/react`, `@tiptap/starter-kit`, `@tiptap/markdown`, `@tiptap/pm`). StarterKit supplies text, bold, italic, headings and ordered/unordered lists; the Markdown extension supplies `contentType: "markdown"` on input and `editor.getMarkdown()` on output, and its manager is the pure parse/serialize path tested without React.
+Chosen for the capture ticket: TipTap **3.32.3** (`@tiptap/react`, `@tiptap/starter-kit`, `@tiptap/markdown`, `@tiptap/pm`). Checklists use `TaskList` + `TaskItem` from `@tiptap/extension-list`; tables use `TableKit` from `@tiptap/extension-table`. StarterKit supplies text, bold, italic, headings and ordered/unordered lists; the Markdown extension supplies `contentType: "markdown"` on input and `editor.getMarkdown()` on output, and its manager is the pure parse/serialize path tested without React.
+
+The running editor and the pure Markdown manager share one extension set (`extensions.ts`), so a round-trip test exercises the same schema a saved note uses.
 
 ## Supported objects
 
