@@ -6,6 +6,7 @@
  * The Markdown extension itself is added only by `NoteEditor`; `MarkdownManager`
  * already owns both directions.
  */
+import Image from "@tiptap/extension-image";
 import { TaskItem, TaskList } from "@tiptap/extension-list";
 import {
   Table,
@@ -26,10 +27,38 @@ const MarkdownTable = Table.extend({
   },
 });
 
-export const editorExtensions = [
+/**
+ * A vault-relative attachment reference is what the note file stores, but the
+ * webview cannot load it directly. The caller supplies the mapping to a
+ * displayable URL; Markdown output keeps the original reference because only
+ * `renderHTML` is overridden.
+ */
+const attachmentImage = (resolveImageSrc: (path: string) => string) =>
+  Image.extend({
+    renderHTML({ HTMLAttributes }) {
+      const src =
+        typeof HTMLAttributes.src === "string"
+          ? resolveImageSrc(HTMLAttributes.src)
+          : HTMLAttributes.src;
+      return ["img", { ...HTMLAttributes, src }];
+    },
+  }).configure({ allowBase64: false });
+
+const baseExtensions = [
   StarterKit,
   TaskList,
   TaskItem,
   TableKit.configure({ table: false }),
   MarkdownTable,
 ] as const;
+
+/**
+ * The one extension set shared by the running editor and the pure Markdown
+ * round-trip. `resolveImageSrc` affects rendering only, never serialization.
+ */
+export const createEditorExtensions = (
+  resolveImageSrc: (path: string) => string = (path) => path,
+) => [...baseExtensions, attachmentImage(resolveImageSrc)] as const;
+
+export const editorExtensions = createEditorExtensions();
+
