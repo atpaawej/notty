@@ -38,6 +38,10 @@ export interface WorkspaceProps {
    * before the window closes. Called with `null` on unmount.
    */
   readonly onController?: (controller: WorkspaceController | null) => void;
+  /** Open the app settings dialog. */
+  readonly onOpenSettings?: () => void;
+  /** Show a warning on the settings entry when the global shortcut failed. */
+  readonly hotkeyError?: boolean;
 }
 
 function IconAllNotes() {
@@ -78,6 +82,15 @@ function IconArchive() {
     <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
       <path d="M4 8h16v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V8Z" />
       <path d="M3 4h18v4H3V4ZM10 12h4" />
+    </svg>
+  );
+}
+
+function IconSettings() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4v-.2a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.6-1H2.8v-4h.2a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.6v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z" />
     </svg>
   );
 }
@@ -212,6 +225,7 @@ function Sidebar({
   selectedFolder,
   showArchived,
   folderEditor,
+  hotkeyError,
   onSelectFolder,
   onSelectArchive,
   onCreateFolder,
@@ -220,11 +234,13 @@ function Sidebar({
   onFolderEditorChange,
   onFolderEditorSubmit,
   onFolderEditorCancel,
+  onOpenSettings,
 }: {
   readonly folders: ReadonlyArray<string>;
   readonly selectedFolder: string | null;
   readonly showArchived: boolean;
   readonly folderEditor: FolderEditorState | null;
+  readonly hotkeyError: boolean;
   readonly onSelectFolder: (folder: string | null) => void;
   readonly onSelectArchive: () => void;
   readonly onCreateFolder: () => void;
@@ -233,6 +249,7 @@ function Sidebar({
   readonly onFolderEditorChange: (value: string) => void;
   readonly onFolderEditorSubmit: () => void;
   readonly onFolderEditorCancel: () => void;
+  readonly onOpenSettings: (() => void) | undefined;
 }) {
   return (
     <nav className="sidebar" aria-label="Folders">
@@ -351,6 +368,29 @@ function Sidebar({
           <IconTrash />
           <span>Trash</span>
         </button>
+        {onOpenSettings === undefined ? null : (
+          <button
+            className={`sidebar-item${hotkeyError ? " has-warning" : ""}`}
+            type="button"
+            title={
+              hotkeyError
+                ? "Global shortcut unavailable — open settings"
+                : "Settings"
+            }
+            onClick={onOpenSettings}
+          >
+            <IconSettings />
+            <span>Settings</span>
+            {hotkeyError ? (
+              <span
+                className="sidebar-badge"
+                aria-label="Global shortcut unavailable"
+              >
+                !
+              </span>
+            ) : null}
+          </button>
+        )}
         <p className="vault-note">Notes are plain Markdown files in your vault.</p>
       </div>
     </nav>
@@ -489,7 +529,7 @@ function NoteList({
   );
 }
 
-export function Workspace({ store, attachments, onController }: WorkspaceProps) {
+export function Workspace({ store, attachments, onController, onOpenSettings, hotkeyError = false }: WorkspaceProps) {
   const controller = useMemo(() => createWorkspace(store), [store]);
   const state = useSyncExternalStore(
     controller.subscribe,
@@ -571,6 +611,7 @@ export function Workspace({ store, attachments, onController }: WorkspaceProps) 
         selectedFolder={state.selectedFolder}
         showArchived={state.showArchived}
         folderEditor={folderEditor}
+        hotkeyError={hotkeyError}
         onSelectFolder={controller.selectFolder}
         onSelectArchive={controller.selectArchive}
         onCreateFolder={createFolder}
@@ -583,6 +624,7 @@ export function Workspace({ store, attachments, onController }: WorkspaceProps) 
         }
         onFolderEditorSubmit={submitFolder}
         onFolderEditorCancel={() => setFolderEditor(null)}
+        onOpenSettings={onOpenSettings}
       />
       <NoteList
         title={listTitle}

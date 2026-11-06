@@ -343,6 +343,165 @@ body {
   color: var(--text-secondary);
 }
 
+.sidebar-badge {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  margin-left: auto;
+  border-radius: 50%;
+  background: rgba(255, 214, 10, 0.16);
+  color: #ffd60a;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.sidebar-item.has-warning svg {
+  color: #ffd60a;
+}
+
+/* ---------- Settings dialog ---------- */
+
+.settings-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.48);
+}
+
+.settings-dialog {
+  width: min(460px, 100%);
+  padding: 18px 20px 20px;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: #2c2c2e;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
+}
+
+.settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 18px;
+}
+
+.settings-header h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+
+.settings-close {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.settings-close:hover {
+  background: var(--selection);
+  color: var(--text-primary);
+}
+
+.settings-section h3 {
+  margin: 0 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.settings-description {
+  margin: 0 0 14px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.hotkey-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.hotkey-value {
+  min-width: 132px;
+  padding: 7px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.24);
+  color: var(--text-primary);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12px;
+  text-align: center;
+}
+
+.hotkey-value.is-unavailable {
+  border-color: rgba(255, 107, 107, 0.45);
+}
+
+.hotkey-capture {
+  min-width: 132px;
+  padding: 7px 10px;
+  border: 1px solid var(--accent);
+  border-radius: 7px;
+  background: var(--accent-tint);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  text-align: center;
+  outline: none;
+  cursor: default;
+}
+
+.settings-button {
+  padding: 6px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: 7px;
+  background: var(--selection);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.settings-button:hover:not(:disabled) {
+  background: var(--accent-tint);
+  border-color: rgba(41, 151, 255, 0.4);
+}
+
+.settings-button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.settings-status,
+.settings-error {
+  margin: 12px 0 0;
+  font-size: 12px;
+}
+
+.settings-status {
+  color: var(--text-secondary);
+}
+
+.settings-error {
+  color: #ff8a8a;
+}
+
+
 /* ---------- Note list ---------- */
 
 .note-list {

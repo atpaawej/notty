@@ -1,6 +1,6 @@
 # Architecture
 
-Five deep modules, one public interface each, wired through Effect Layers. Read this before adding a module or reaching into one.
+Six deep modules, one public interface each, wired through Effect Layers. Read this before adding a module or reaching into one.
 
 ## Design language
 
@@ -22,6 +22,7 @@ src/modules/
   note-index/   owns the SQLite index and search
   editor/       owns TipTap, wrapped
   workspace/    owns the three-column UI state
+  hotkey/       owns the configurable global shortcut
 ```
 
 Each folder exposes only `index.ts`. Anything else in the folder is private.
@@ -66,10 +67,19 @@ Interface: the three-column shell — selected folder, selected note, and the co
 
 Hides: sidebar and note-list rendering, folder-tree indentation, keyboard shortcuts, optimistic updates, auto-save scheduling.
 
+### hotkey
+
+Interface: the controller that keeps one accelerator registered, the settings dialog, and the accelerator syntax helpers. Pressing the accelerator raises and focuses the main window from any application.
+
+Hides: the Tauri global-shortcut plugin, the OS grab and its collision error, WebView local-storage persistence, the "register the new shortcut before dropping the old one" rule.
+
+Adapters: the Tauri plugin (production), an in-memory adapter that records registrations and models shortcuts already taken by another app (tests).
+
 ## Seams
 
 - **Storage seam** — `note-file` × `note-index` × `vault`. Tested with a temporary vault and an in-memory index. If the file and the index disagree, the file wins.
 - **Editor seam** — `editor`'s Markdown in/out. Every supported object must round-trip through parse and serialize.
+- **Hotkey seam** — `hotkey`'s one registered accelerator. The production adapter owns the Tauri global-shortcut plugin; the in-memory adapter records registrations and can model collisions.
 - **Product seam** — the running app. Create a note, see it in the list, quit, relaunch, still there.
 
 No module imports another module's internals. If two modules need to share a type, it lives in the module that owns the concept and the other imports it from `index.ts`.

@@ -4,13 +4,26 @@
  */
 import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { useCallback, useEffect, useRef } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import type { AppRuntime } from "./app-runtime";
+import { HotkeySettingsDialog } from "./modules/hotkey";
 import { Workspace, type WorkspaceController } from "./modules/workspace";
 import "./styles.css";
 
 export default function App({ runtime }: { readonly runtime: AppRuntime }) {
   const controller = useRef<WorkspaceController | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const hotkey = useSyncExternalStore(
+    runtime.hotkey.subscribe,
+    runtime.hotkey.getState,
+    runtime.hotkey.getState,
+  );
 
   const onController = useCallback((next: WorkspaceController | null) => {
     controller.current = next;
@@ -50,10 +63,22 @@ export default function App({ runtime }: { readonly runtime: AppRuntime }) {
   }, []);
 
   return (
-    <Workspace
-      store={runtime.store}
-      attachments={runtime.attachments}
-      onController={onController}
-    />
+    <>
+      <Workspace
+        store={runtime.store}
+        attachments={runtime.attachments}
+        onController={onController}
+        onOpenSettings={() => setSettingsOpen(true)}
+        hotkeyError={hotkey.error !== null}
+      />
+      {settingsOpen ? (
+        <HotkeySettingsDialog
+          shortcut={hotkey.shortcut}
+          error={hotkey.error}
+          onApply={runtime.hotkey.setShortcut}
+          onClose={() => setSettingsOpen(false)}
+        />
+      ) : null}
+    </>
   );
 }
