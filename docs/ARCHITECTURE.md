@@ -1,6 +1,6 @@
 # Architecture
 
-Seven deep modules, one public interface each, wired through Effect Layers. Read this before adding a module or reaching into one.
+Eight deep modules, one public interface each, wired through Effect Layers. Read this before adding a module or reaching into one.
 
 ## Design language
 
@@ -24,6 +24,7 @@ src/modules/
   editor/       owns TipTap, wrapped
   workspace/    owns the three-column UI state
   hotkey/       owns the configurable global shortcut
+  updater/      owns release checks, staging and restart
 ```
 
 Each folder exposes only `index.ts`. Anything else in the folder is private.
@@ -84,11 +85,20 @@ Hides: the Tauri global-shortcut plugin, the OS grab and its collision error, We
 
 Adapters: the Tauri plugin (production), an in-memory adapter that records registrations and models shortcuts already taken by another app (tests).
 
+### updater
+
+Interface: a reactive controller that checks GitHub Releases, downloads and stages a user-space update, offers restart, and exposes the banner. States are `Idle`, `Checking`, `UpToDate`, `Available`, `Downloading`, `ReadyToRestart` and `Failed`; failures never throw at callers.
+
+Hides: release scheduling, version comparison, permission probing, the download/stage/verify sequence, temporary directories, and the pre-restart flush. A read-only system install stops at `Available` with `isUserSpace: false` and a release link.
+
+Adapters: the Tauri shell (production) and an in-memory adapter that models user-space, read-only, failed and partial-download cases without network or disk I/O (tests).
+
 ## Seams
 
 - **Storage seam** — `note-file` × `note-index` × `vault`. Tested with a temporary vault and an in-memory index. If the file and the index disagree, the file wins.
 - **Editor seam** — `editor`'s Markdown in/out. Every supported object must round-trip through parse and serialize.
 - **Hotkey seam** — `hotkey`'s one registered accelerator. The production adapter owns the Tauri global-shortcut plugin; the in-memory adapter records registrations and can model collisions.
+- **Updater seam** — `updater`'s GitHub check, staged download and restart. The Tauri adapter talks to the shell; the memory adapter models every state without I/O.
 - **Client seam** — `client`'s Promise methods. The CLI and tests use the same interface; the production adapter opens the XDG vault, the memory adapter opens a temporary one.
 - **Product seam** — the running app. Create a note, see it in the list, quit, relaunch, still there.
 
