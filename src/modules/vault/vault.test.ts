@@ -230,6 +230,54 @@ describe("Vault layer swapping", () => {
   });
 });
 
+describe("Vault welcome-note seeding marker", () => {
+  it("starts unseeded and stays seeded once marked", async () => {
+    await ensureVault();
+
+    await expect(
+      withVault((vault) => vault.hasSeededWelcomeNotes()),
+    ).resolves.toBe(false);
+
+    await withVault((vault) => vault.markWelcomeNotesSeeded());
+
+    await expect(
+      withVault((vault) => vault.hasSeededWelcomeNotes()),
+    ).resolves.toBe(true);
+  });
+
+  it("keeps the marker inside .notty, away from the notes", async () => {
+    const paths = await ensureVault();
+    await withVault((vault) => vault.markWelcomeNotesSeeded());
+
+    expect(await readdir(join(paths.root, ".notty"))).toEqual([
+      "welcome-notes-seeded",
+    ]);
+    expect(await fileExists(join(paths.root, "welcome-notes-seeded"))).toBe(
+      false,
+    );
+  });
+
+  it("reports unseeded before the vault exists", async () => {
+    await expect(
+      withVault((vault) => vault.hasSeededWelcomeNotes()),
+    ).resolves.toBe(false);
+  });
+
+  it("supports the marker in the in-memory adapter", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const vault = yield* Vault;
+        const before = yield* vault.hasSeededWelcomeNotes();
+        yield* vault.markWelcomeNotesSeeded();
+        const after = yield* vault.hasSeededWelcomeNotes();
+        return { before, after };
+      }).pipe(Effect.provide(vaultMemoryLayer)),
+    );
+
+    expect(result).toEqual({ before: false, after: true });
+  });
+});
+
 describe("Vault folders", () => {
   it("creates nested folders and lists the visible tree", async () => {
     const paths = await ensureVault();

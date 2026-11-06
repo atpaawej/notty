@@ -29,7 +29,7 @@ Each folder exposes only `index.ts`. Anything else in the folder is private.
 
 ### vault
 
-Interface: resolve the vault location, ensure it exists, store attachments, list/create/rename/delete folders, sweep expired Trash on startup.
+Interface: resolve the vault location, ensure it exists, store attachments, list/create/rename/delete folders, sweep expired Trash on startup, and guard the one-time welcome-note seed.
 
 Hides: XDG path resolution, directory creation, folder path validation, the `.notty/` metadata folder, Trash retention, first-run seeding flags.
 

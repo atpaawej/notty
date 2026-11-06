@@ -29,6 +29,7 @@ import {
   type VaultShape,
 } from "./modules/vault";
 import type { NoteStore, WorkspaceAttachments } from "./modules/workspace";
+import { seedWelcomeNotes } from "./welcome-notes";
 
 const vaultLayer = vaultTauriLayer;
 const indexLayer = noteIndexTauriLayer.pipe(Layer.provide(vaultLayer));
@@ -145,6 +146,14 @@ export const initializeRuntime = async (): Promise<AppRuntime> => {
       return paths.root;
     }),
   );
+
+  // First launch only. A failed seed must never stop the app from opening;
+  // the marker is written last, so the next launch tries again.
+  try {
+    await runtime.runPromise(seedWelcomeNotes());
+  } catch (cause) {
+    console.warn("Notty could not seed the welcome notes", cause);
+  }
 
   const hotkeyService = await hotkeyRuntime.runPromise(
     Effect.gen(function* () {
