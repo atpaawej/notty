@@ -62,7 +62,7 @@ TipTap types must never appear outside this folder. See `docs/EDITOR.md`.
 
 ### workspace
 
-Interface: the three-column shell — selected folder, selected note, and the commands that change them, including folder create/rename/delete and moving a note.
+Interface: the three-column shell — selected folder, selected note, and the commands that change them, including folder create/rename/delete, moving a note, pinning, archiving and duplicating.
 
 Hides: sidebar and note-list rendering, folder-tree indentation, keyboard shortcuts, optimistic updates, auto-save scheduling.
 

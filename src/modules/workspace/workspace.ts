@@ -15,7 +15,10 @@ import type {
 
 /** The persistence surface the workspace needs. */
 export interface NoteStore {
-  readonly list: () => Promise<ReadonlyArray<NoteSummary>>;
+  readonly list: (options?: {
+    /** Include notes hidden from the normal list by the Archive flag. */
+    readonly includeArchived?: boolean;
+  }) => Promise<ReadonlyArray<NoteSummary>>;
   readonly get: (id: string) => Promise<IndexedNote | null>;
   readonly save: (note: Note, folder: string) => Promise<IndexedNote>;
   /** Every folder as a vault-relative POSIX path, sorted. */
@@ -40,6 +43,8 @@ export interface WorkspaceState {
   readonly folders: ReadonlyArray<string>;
   /** `null` means All Notes; otherwise an exact folder path. */
   readonly selectedFolder: string | null;
+  /** True while the note list shows archived notes instead of active ones. */
+  readonly showArchived: boolean;
   readonly selectedId: string | null;
   readonly selected: EditorNote | null;
   /** False while the initial list is still being read. */
@@ -67,6 +72,14 @@ export interface WorkspaceController {
   readonly selectNote: (id: string) => Promise<void>;
   /** Select a folder, or `null` for All Notes. */
   readonly selectFolder: (folder: string | null) => void;
+  /** Show archived notes; the normal list hides them. */
+  readonly selectArchive: () => void;
+  /** Pin or unpin a note with one action. */
+  readonly togglePin: (id: string) => Promise<void>;
+  /** Hide a note from the normal list, or bring it back. */
+  readonly setArchived: (id: string, archived: boolean) => Promise<void>;
+  /** Copy a note into the same folder with a new identity and timestamps. */
+  readonly duplicateNote: (id: string) => Promise<void>;
   /** Create a folder (nested under the selection) and select it. */
   readonly createFolder: (name: string) => Promise<void>;
   /** Rename a folder in place, keeping its notes. */
@@ -137,6 +150,19 @@ const withSummary = (
 const sortedFolders = (
   folders: ReadonlyArray<string>,
 ): ReadonlyArray<string> => [...folders].sort((left, right) => left.localeCompare(right));
+
+/** The notes the current view shows: one folder or all, active or archived. */
+const viewOf = (
+  notes: ReadonlyArray<NoteSummary>,
+  selectedFolder: string | null,
+  showArchived: boolean,
+): ReadonlyArray<NoteSummary> =>
+  notes.filter((note) =>
+    showArchived
+      ? note.archived
+      : !note.archived &&
+        (selectedFolder === null || note.folder === selectedFolder),
+  );
 
 const parentOf = (folder: string): string => {
   const slash = folder.lastIndexOf("/");
@@ -215,10 +241,13 @@ export function createWorkspace(
     notes: [],
     folders: [],
     selectedFolder: null,
+    showArchived: false,
     selectedId: null,
     selected: null,
     ready: false,
   };
+  /** Every known note, including archived and other folders. */
+  let allNotes: ReadonlyArray<NoteSummary> = [];
 
   const listeners = new Set<() => void>();
   let draft: Note | null = null;
@@ -243,11 +272,36 @@ export function createWorkspace(
 
   const show = (note: Note): void => {
     draft = note;
+    allNotes = withSummary(allNotes, summaryOf(note, draftFolder));
     update({
       ...state,
-      notes: withSummary(state.notes, summaryOf(note, draftFolder)),
+      notes: viewOf(allNotes, state.selectedFolder, state.showArchived),
       selectedId: note.id,
       selected: editorNote(note),
+    });
+  };
+
+  /** The draft is authoritative while it is open; otherwise read from disk. */
+  const currentNote = async (id: string): Promise<IndexedNote | null> => {
+    if (draft !== null && draft.id === id) {
+      return { note: draft, folder: draftFolder };
+    }
+    return store.get(id);
+  };
+
+  const applySaved = (saved: IndexedNote): void => {
+    const isDraft = draft !== null && draft.id === saved.note.id;
+    if (isDraft) {
+      draft = saved.note;
+      draftFolder = saved.folder;
+    }
+    allNotes = withSummary(allNotes, summaryOf(saved.note, saved.folder));
+    update({
+      ...state,
+      notes: viewOf(allNotes, state.selectedFolder, state.showArchived),
+      ...(isDraft
+        ? { selectedId: saved.note.id, selected: editorNote(saved.note) }
+        : {}),
     });
   };
 
@@ -309,11 +363,13 @@ export function createWorkspace(
 
     draft = note;
     draftFolder = state.selectedFolder ?? "";
+    allNotes = withSummary(allNotes, summaryOf(note, draftFolder));
     update({
       ...state,
-      notes: withSummary(state.notes, summaryOf(note, draftFolder)),
+      notes: viewOf(allNotes, state.selectedFolder, false),
       selectedId: note.id,
       selected: editorNote(note),
+      showArchived: false,
       ready: true,
     });
 
@@ -342,7 +398,101 @@ export function createWorkspace(
   };
 
   const selectFolder = (folder: string | null): void => {
-    update({ ...state, selectedFolder: folder });
+    update({
+      ...state,
+      selectedFolder: folder,
+      showArchived: false,
+      notes: viewOf(allNotes, folder, false),
+    });
+  };
+
+  const selectArchive = (): void => {
+    update({
+      ...state,
+      selectedFolder: null,
+      showArchived: true,
+      notes: viewOf(allNotes, null, true),
+    });
+  };
+
+  const togglePin = async (id: string): Promise<void> => {
+    await flush();
+    try {
+      const found = await currentNote(id);
+      if (found === null) return;
+      const saved = await store.save(
+        { ...found.note, pinned: !found.note.pinned },
+        found.folder,
+      );
+      applySaved(saved);
+    } catch (cause) {
+      console.warn("Notty could not pin a note", cause);
+    }
+  };
+
+  const setArchived = async (id: string, archived: boolean): Promise<void> => {
+    await flush();
+    try {
+      const found = await currentNote(id);
+      if (found === null || found.note.archived === archived) return;
+      const saved = await store.save(
+        { ...found.note, archived },
+        found.folder,
+      );
+
+      // Archive and Unarchive both remove the note from the list the user is
+      // looking at, so an open editor for it must close in step.
+      const deselect =
+        state.selectedId === id && archived !== state.showArchived;
+      if (deselect) {
+        draft = null;
+        draftFolder = "";
+      }
+      allNotes = withSummary(allNotes, summaryOf(saved.note, saved.folder));
+      update({
+        ...state,
+        notes: viewOf(allNotes, state.selectedFolder, state.showArchived),
+        ...(deselect ? { selectedId: null, selected: null } : {}),
+      });
+    } catch (cause) {
+      console.warn("Notty could not archive a note", cause);
+    }
+  };
+
+  const duplicateNote = async (id: string): Promise<void> => {
+    await flush();
+    try {
+      const found = await currentNote(id);
+      if (found === null) return;
+
+      const createdAt = now().toISOString();
+      const copy: Note = {
+        id: newId(),
+        title: found.note.title,
+        created: createdAt,
+        modified: createdAt,
+        pinned: false,
+        archived: false,
+        ...(found.note.titleLocked === true ? { titleLocked: true } : {}),
+        body: found.note.body,
+        ...(found.note.extra === undefined ? {} : { extra: found.note.extra }),
+      };
+
+      draft = copy;
+      draftFolder = found.folder;
+      allNotes = withSummary(allNotes, summaryOf(copy, found.folder));
+      update({
+        ...state,
+        notes: viewOf(allNotes, state.selectedFolder, false),
+        showArchived: false,
+        selectedId: copy.id,
+        selected: editorNote(copy),
+      });
+      enqueue({ note: copy, folder: found.folder });
+      await flush();
+    } catch (cause) {
+      console.warn("Notty could not duplicate a note", cause);
+    }
   };
 
   const createFolder = async (name: string): Promise<void> => {
@@ -378,17 +528,19 @@ export function createWorkspace(
       await store.renameFolder(folder, nextFolder);
       const [folders, notes] = await Promise.all([
         store.listFolders(),
-        store.list(),
+        store.list({ includeArchived: true }),
       ]);
+      const selectedFolder =
+        state.selectedFolder === null
+          ? null
+          : remapFolder(state.selectedFolder, folder, nextFolder);
       draftFolder = remapFolder(draftFolder, folder, nextFolder);
+      allNotes = sorted(notes);
       update({
         ...state,
         folders: sortedFolders(folders),
-        notes: sorted(notes),
-        selectedFolder:
-          state.selectedFolder === null
-            ? null
-            : remapFolder(state.selectedFolder, folder, nextFolder),
+        notes: viewOf(allNotes, selectedFolder, state.showArchived),
+        selectedFolder,
       });
     } catch (cause) {
       console.warn("Notty could not rename a folder", cause);
@@ -401,7 +553,7 @@ export function createWorkspace(
       await store.deleteFolder(folder);
       const [folders, notes] = await Promise.all([
         store.listFolders(),
-        store.list(),
+        store.list({ includeArchived: true }),
       ]);
       const removedDraft = draft !== null && isInside(draftFolder, folder);
       const removedSelection =
@@ -410,13 +562,15 @@ export function createWorkspace(
         draft = null;
         draftFolder = "";
       }
+      const selectedFolder = removedSelection
+        ? parentOf(folder) || null
+        : state.selectedFolder;
+      allNotes = sorted(notes);
       update({
         ...state,
         folders: sortedFolders(folders),
-        notes: sorted(notes),
-        selectedFolder: removedSelection
-          ? parentOf(folder) || null
-          : state.selectedFolder,
+        notes: viewOf(allNotes, selectedFolder, state.showArchived),
+        selectedFolder,
         ...(removedDraft ? { selectedId: null, selected: null } : {}),
       });
     } catch (cause) {
@@ -436,7 +590,11 @@ export function createWorkspace(
         draftFolder = saved.folder;
         show(saved.note);
       } else {
-        update({ ...state, notes: sorted(await store.list()) });
+        allNotes = sorted(await store.list({ includeArchived: true }));
+        update({
+          ...state,
+          notes: viewOf(allNotes, state.selectedFolder, state.showArchived),
+        });
       }
     } catch (cause) {
       console.warn("Notty could not move a note", cause);
@@ -470,7 +628,7 @@ export function createWorkspace(
   const load = async (): Promise<void> => {
     try {
       const [summaries, folders] = await Promise.all([
-        store.list(),
+        store.list({ includeArchived: true }),
         store.listFolders(),
       ]);
       const loaded = sorted(summaries);
@@ -479,22 +637,29 @@ export function createWorkspace(
       if (draft !== null) {
         // The user created or opened a note while the list was loading.
         // Keep their selection and merge the optimistic list with disk.
-        const known = new Set(state.notes.map((note) => note.id));
+        const known = new Set(allNotes.map((note) => note.id));
+        allNotes = sorted([
+          ...loaded.filter((note) => !known.has(note.id)),
+          ...allNotes,
+        ]);
         update({
           ...state,
-          notes: sorted([
-            ...loaded.filter((note) => !known.has(note.id)),
-            ...state.notes,
-          ]),
+          notes: viewOf(allNotes, state.selectedFolder, state.showArchived),
           folders: folderList,
           ready: true,
         });
         return;
       }
 
-      update({ ...state, notes: loaded, folders: folderList, ready: true });
+      allNotes = loaded;
+      const displayed = viewOf(
+        allNotes,
+        state.selectedFolder,
+        state.showArchived,
+      );
+      update({ ...state, notes: displayed, folders: folderList, ready: true });
 
-      const first = loaded[0];
+      const first = displayed[0];
       if (first === undefined) return;
       const found = await store.get(first.id);
       if (found === null) return;
@@ -527,6 +692,10 @@ export function createWorkspace(
     createNote,
     selectNote,
     selectFolder,
+    selectArchive,
+    togglePin,
+    setArchived,
+    duplicateNote,
     createFolder,
     renameFolder,
     deleteFolder,

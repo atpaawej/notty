@@ -4,7 +4,14 @@
  * Layout and shortcuts live here; state, selection and auto-save live in the
  * controller. There is deliberately no save button and no save indicator.
  */
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 import { NoteEditor } from "../editor";
 import type { NoteSummary } from "../note-index";
 import {
@@ -55,16 +62,147 @@ function IconCompose() {
   );
 }
 
+function IconArchive() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 8h16v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V8Z" />
+      <path d="M3 4h18v4H3V4ZM10 12h4" />
+    </svg>
+  );
+}
+
+interface MenuAction {
+  readonly label: string;
+  readonly onSelect: () => void;
+  readonly danger?: boolean;
+}
+
+interface MenuPosition {
+  readonly top: number;
+  readonly right: number;
+}
+
+/**
+ * The one contextual action menu used by folders and notes. It is opened by a
+ * `···` trigger that only appears on hover, focus or selection, and closes on
+ * an outside click, Escape, scrolling or a resize.
+ */
+function ActionMenu({
+  label,
+  actions,
+}: {
+  readonly label: string;
+  readonly actions: ReadonlyArray<MenuAction>;
+}) {
+  const [position, setPosition] = useState<MenuPosition | null>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
+  const open = position !== null;
+
+  useEffect(() => {
+    if (!open) return;
+    const close = () => setPosition(null);
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (
+        target !== null &&
+        (menu.current?.contains(target) === true ||
+          trigger.current?.contains(target) === true)
+      ) {
+        return;
+      }
+      close();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.stopPropagation();
+      close();
+      trigger.current?.focus();
+    };
+
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [open]);
+
+  const toggle = (event: ReactMouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (open) {
+      setPosition(null);
+      return;
+    }
+    const rect = trigger.current?.getBoundingClientRect();
+    if (rect === undefined) return;
+    setPosition({
+      top: Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - 172)),
+      right: Math.max(8, window.innerWidth - rect.right),
+    });
+  };
+
+  return (
+    <div className="item-menu">
+      <button
+        ref={trigger}
+        type="button"
+        className="item-menu-trigger"
+        aria-label={`Actions for ${label}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={toggle}
+      >
+        <span aria-hidden="true">···</span>
+      </button>
+      {position === null ? null : (
+        <div
+          ref={menu}
+          className="item-menu-popup"
+          role="menu"
+          aria-label={`Actions for ${label}`}
+          style={{ top: position.top, right: position.right }}
+        >
+          {actions.map((action) => (
+            <button
+              key={action.label}
+              type="button"
+              role="menuitem"
+              className={action.danger === true ? "is-danger" : undefined}
+              onClick={(event) => {
+                event.stopPropagation();
+                setPosition(null);
+                action.onSelect();
+              }}
+            >
+              {action.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface FolderEditorState {
   readonly mode: "create" | "rename";
+  /** The folder being renamed; `null` while creating a folder. */
+  readonly folder: string | null;
   readonly value: string;
 }
 
 function Sidebar({
   folders,
   selectedFolder,
+  showArchived,
   folderEditor,
   onSelectFolder,
+  onSelectArchive,
   onCreateFolder,
   onRenameFolder,
   onDeleteFolder,
@@ -74,20 +212,17 @@ function Sidebar({
 }: {
   readonly folders: ReadonlyArray<string>;
   readonly selectedFolder: string | null;
+  readonly showArchived: boolean;
   readonly folderEditor: FolderEditorState | null;
   readonly onSelectFolder: (folder: string | null) => void;
+  readonly onSelectArchive: () => void;
   readonly onCreateFolder: () => void;
-  readonly onRenameFolder: () => void;
-  readonly onDeleteFolder: () => void;
+  readonly onRenameFolder: (folder: string) => void;
+  readonly onDeleteFolder: (folder: string) => void;
   readonly onFolderEditorChange: (value: string) => void;
   readonly onFolderEditorSubmit: () => void;
   readonly onFolderEditorCancel: () => void;
 }) {
-  const selectedName =
-    selectedFolder === null
-      ? null
-      : (selectedFolder.split("/").pop() ?? selectedFolder);
-
   return (
     <nav className="sidebar" aria-label="Folders">
       <div className="wordmark">Notty</div>
@@ -95,13 +230,22 @@ function Sidebar({
       <div className="sidebar-section">
         <h2 className="sidebar-heading">Library</h2>
         <button
-          className={`sidebar-item${selectedFolder === null ? " is-active" : ""}`}
+          className={`sidebar-item${selectedFolder === null && !showArchived ? " is-active" : ""}`}
           type="button"
-          aria-current={selectedFolder === null ? "page" : undefined}
+          aria-current={selectedFolder === null && !showArchived ? "page" : undefined}
           onClick={() => onSelectFolder(null)}
         >
           <IconAllNotes />
           <span>All Notes</span>
+        </button>
+        <button
+          className={`sidebar-item${showArchived ? " is-active" : ""}`}
+          type="button"
+          aria-current={showArchived ? "page" : undefined}
+          onClick={onSelectArchive}
+        >
+          <IconArchive />
+          <span>Archive</span>
         </button>
       </div>
 
@@ -151,17 +295,6 @@ function Sidebar({
           </form>
         )}
 
-        {selectedFolder === null || folderEditor !== null ? null : (
-          <div className="sidebar-folder-actions">
-            <button type="button" onClick={onRenameFolder}>
-              Rename {selectedName}
-            </button>
-            <button type="button" onClick={onDeleteFolder}>
-              Delete
-            </button>
-          </div>
-        )}
-
         {folders.length === 0 ? (
           <p className="sidebar-empty">No folders yet</p>
         ) : (
@@ -170,17 +303,32 @@ function Sidebar({
               const depth = folder.split("/").length - 1;
               const name = folder.split("/").pop() ?? folder;
               return (
-                <button
+                <div
                   key={folder}
-                  className={`sidebar-item${folder === selectedFolder ? " is-active" : ""}`}
-                  type="button"
-                  title={folder}
+                  className={`sidebar-item sidebar-item-row${folder === selectedFolder && !showArchived ? " is-active" : ""}`}
                   style={{ paddingLeft: 8 + depth * 14 }}
-                  onClick={() => onSelectFolder(folder)}
+                  title={folder}
                 >
-                  <IconFolder />
-                  <span>{name}</span>
-                </button>
+                  <button
+                    className="sidebar-item-main"
+                    type="button"
+                    onClick={() => onSelectFolder(folder)}
+                  >
+                    <IconFolder />
+                    <span>{name}</span>
+                  </button>
+                  <ActionMenu
+                    label={name}
+                    actions={[
+                      { label: "Rename", onSelect: () => onRenameFolder(folder) },
+                      {
+                        label: "Delete",
+                        danger: true,
+                        onSelect: () => onDeleteFolder(folder),
+                      },
+                    ]}
+                  />
+                </div>
               );
             })}
           </div>
@@ -214,6 +362,9 @@ function NoteList({
   ready,
   onCreate,
   onSelect,
+  onTogglePin,
+  onDuplicate,
+  onSetArchived,
 }: {
   readonly title: string;
   readonly notes: ReadonlyArray<NoteSummary>;
@@ -221,6 +372,9 @@ function NoteList({
   readonly ready: boolean;
   readonly onCreate: () => void;
   readonly onSelect: (id: string) => void;
+  readonly onTogglePin: (id: string) => void;
+  readonly onDuplicate: (id: string) => void;
+  readonly onSetArchived: (id: string, archived: boolean) => void;
 }) {
   return (
     <section className="note-list" aria-label="Note list">
@@ -247,18 +401,41 @@ function NoteList({
       ) : (
         <div className="note-list-items" role="list">
           {notes.map((note) => (
-            <button
+            <div
               key={note.id}
-              type="button"
               role="listitem"
               className={`note-list-item${note.id === selectedId ? " is-active" : ""}`}
-              onClick={() => onSelect(note.id)}
             >
-              <span className="note-list-item-title">{note.title || "Untitled"}</span>
-              <time className="note-list-item-date" dateTime={note.modified}>
-                {formatModified(note.modified)}
-              </time>
-            </button>
+              <button
+                className="note-list-item-main"
+                type="button"
+                onClick={() => onSelect(note.id)}
+              >
+                <span className="note-list-item-title">
+                  {note.title || "Untitled"}
+                </span>
+                <time className="note-list-item-date" dateTime={note.modified}>
+                  {formatModified(note.modified)}
+                </time>
+              </button>
+              <ActionMenu
+                label={note.title || "Untitled"}
+                actions={[
+                  {
+                    label: note.pinned ? "Unpin" : "Pin",
+                    onSelect: () => onTogglePin(note.id),
+                  },
+                  {
+                    label: "Duplicate",
+                    onSelect: () => onDuplicate(note.id),
+                  },
+                  {
+                    label: note.archived ? "Unarchive" : "Archive",
+                    onSelect: () => onSetArchived(note.id, !note.archived),
+                  },
+                ]}
+              />
+            </div>
           ))}
         </div>
       )}
@@ -298,11 +475,10 @@ export function Workspace({ store, onController }: WorkspaceProps) {
   }, [controller]);
 
   const selected = state.selected;
-  const visibleNotes =
-    state.selectedFolder === null
-      ? state.notes
-      : state.notes.filter((note) => note.folder === state.selectedFolder);
-  const listTitle = state.selectedFolder ?? "All Notes";
+  const visibleNotes = state.notes;
+  const listTitle = state.showArchived
+    ? "Archive"
+    : (state.selectedFolder ?? "All Notes");
   const selectedFolderPath =
     state.notes.find((note) => note.id === state.selectedId)?.folder ?? "";
 
@@ -311,21 +487,19 @@ export function Workspace({ store, onController }: WorkspaceProps) {
   );
 
   const createFolder = () => {
-    setFolderEditor({ mode: "create", value: "" });
+    setFolderEditor({ mode: "create", folder: null, value: "" });
   };
 
-  const renameFolder = () => {
-    if (state.selectedFolder === null) return;
-    const current = state.selectedFolder.split("/").pop() ?? state.selectedFolder;
-    setFolderEditor({ mode: "rename", value: current });
+  const renameFolder = (folder: string) => {
+    const current = folder.split("/").pop() ?? folder;
+    setFolderEditor({ mode: "rename", folder, value: current });
   };
 
-  const deleteFolder = () => {
-    if (state.selectedFolder === null) return;
+  const deleteFolder = (folder: string) => {
     const confirmed = window.confirm(
-      `Delete "${state.selectedFolder}" and every note inside it?`,
+      `Delete "${folder}" and every note inside it?`,
     );
-    if (confirmed) void controller.deleteFolder(state.selectedFolder);
+    if (confirmed) void controller.deleteFolder(folder);
   };
 
   const submitFolder = () => {
@@ -333,8 +507,8 @@ export function Workspace({ store, onController }: WorkspaceProps) {
     const name = folderEditor.value;
     if (folderEditor.mode === "create") {
       void controller.createFolder(name);
-    } else if (state.selectedFolder !== null) {
-      void controller.renameFolder(state.selectedFolder, name);
+    } else if (folderEditor.folder !== null) {
+      void controller.renameFolder(folderEditor.folder, name);
     }
     setFolderEditor(null);
   };
@@ -344,8 +518,10 @@ export function Workspace({ store, onController }: WorkspaceProps) {
       <Sidebar
         folders={state.folders}
         selectedFolder={state.selectedFolder}
+        showArchived={state.showArchived}
         folderEditor={folderEditor}
         onSelectFolder={controller.selectFolder}
+        onSelectArchive={controller.selectArchive}
         onCreateFolder={createFolder}
         onRenameFolder={renameFolder}
         onDeleteFolder={deleteFolder}
@@ -364,6 +540,9 @@ export function Workspace({ store, onController }: WorkspaceProps) {
         ready={state.ready}
         onCreate={() => void controller.createNote()}
         onSelect={(id) => void controller.selectNote(id)}
+        onTogglePin={(id) => void controller.togglePin(id)}
+        onDuplicate={(id) => void controller.duplicateNote(id)}
+        onSetArchived={(id, archived) => void controller.setArchived(id, archived)}
       />
       {selected === null ? (
         <main className="editor" aria-label="Editor">

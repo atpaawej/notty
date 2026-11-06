@@ -50,7 +50,7 @@ const makeStore = (root: string): NoteStore => {
     );
 
   return {
-    list: () => run((index) => index.list()),
+    list: (listOptions) => run((index) => index.list(listOptions)),
     get: (id) => run((index) => index.get(id)),
     save: (note, folder) => run((index) => index.save(note, folder)),
     listFolders: () => listFolderTree(root),
@@ -315,6 +315,119 @@ describe("selection", () => {
     await workspace.selectNote("note-1");
 
     expect((await store.get("note-1"))?.note.body).toBe("Unsaved when switching");
+  });
+});
+
+describe("pin, archive and duplicate", () => {
+  it("pins a note to the top and survives a relaunch", async () => {
+    const store = makeStore(vaultRoot);
+    const workspace = createWorkspace(store, options());
+    await workspace.ready;
+
+    await workspace.createNote();
+    workspace.setBody("First note");
+    await workspace.flush();
+
+    advance(60_000);
+    await workspace.createNote();
+    workspace.setBody("Second note");
+    await workspace.flush();
+    expect(workspace.getState().notes.map((note) => note.id)).toEqual([
+      "note-2",
+      "note-1",
+    ]);
+
+    await workspace.togglePin("note-1");
+
+    expect(workspace.getState().notes.map((note) => note.id)).toEqual([
+      "note-1",
+      "note-2",
+    ]);
+    expect(workspace.getState().notes[0]?.pinned).toBe(true);
+    expect((await store.get("note-1"))?.note.pinned).toBe(true);
+
+    const reopened = createWorkspace(makeStore(vaultRoot), options());
+    await reopened.ready;
+    expect(reopened.getState().notes.map((note) => note.id)).toEqual([
+      "note-1",
+      "note-2",
+    ]);
+
+    await reopened.togglePin("note-1");
+    expect(reopened.getState().notes.map((note) => note.id)).toEqual([
+      "note-2",
+      "note-1",
+    ]);
+    await reopened.flush();
+  });
+
+  it("archives a note without deleting it and unarchives it later", async () => {
+    const store = makeStore(vaultRoot);
+    const workspace = createWorkspace(store, options());
+    await workspace.ready;
+
+    await workspace.createNote();
+    workspace.setBody("Keep me safe");
+    await workspace.flush();
+    const id = workspace.getState().selectedId as string;
+
+    await workspace.setArchived(id, true);
+
+    expect(workspace.getState().selectedId).toBeNull();
+    expect(workspace.getState().selected).toBeNull();
+    expect(workspace.getState().notes).toEqual([]);
+    expect((await store.get(id))?.note.body).toBe("Keep me safe");
+    expect((await store.get(id))?.note.archived).toBe(true);
+
+    const reopened = createWorkspace(makeStore(vaultRoot), options());
+    await reopened.ready;
+    expect(reopened.getState().selectedId).toBeNull();
+    expect(reopened.getState().notes).toEqual([]);
+
+    reopened.selectArchive();
+    expect(reopened.getState().showArchived).toBe(true);
+    expect(reopened.getState().notes.map((note) => note.id)).toEqual([id]);
+    await reopened.selectNote(id);
+    expect(reopened.getState().selected?.body).toBe("Keep me safe");
+
+    await reopened.setArchived(id, false);
+    expect(reopened.getState().notes).toEqual([]);
+    reopened.selectFolder(null);
+    expect(reopened.getState().notes.map((note) => note.id)).toEqual([id]);
+    expect((await store.get(id))?.note.archived).toBe(false);
+    await reopened.flush();
+  });
+
+  it("duplicates a note with the same body, a new identity and new timestamps", async () => {
+    const store = makeStore(vaultRoot);
+    const workspace = createWorkspace(store, options());
+    await workspace.ready;
+
+    await workspace.createNote();
+    workspace.setBody("Template body");
+    workspace.setTitle("Template");
+    await workspace.flush();
+    const originalId = workspace.getState().selectedId as string;
+
+    advance(60_000);
+    await workspace.duplicateNote(originalId);
+    await workspace.flush();
+
+    const state = workspace.getState();
+    expect(state.notes).toHaveLength(2);
+    expect(state.selectedId).toBe("note-2");
+    expect(state.selected?.body).toBe("Template body");
+    expect(state.selected?.title).toBe("Template");
+
+    const original = await store.get(originalId);
+    const copy = await store.get("note-2");
+    expect(original?.note.body).toBe("Template body");
+    expect(original?.note.created).toBe("2026-11-05T09:14:00.000Z");
+    expect(copy?.note.body).toBe("Template body");
+    expect(copy?.note.created).toBe("2026-11-05T09:15:00.000Z");
+    expect(copy?.note.modified).toBe("2026-11-05T09:15:00.000Z");
+    expect(copy?.note.id).not.toBe(originalId);
+    expect(copy?.folder).toBe(original?.folder);
   });
 });
 

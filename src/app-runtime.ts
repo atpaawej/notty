@@ -50,7 +50,7 @@ const folderChanged = async (): Promise<void> => {
 };
 
 export const noteStore: NoteStore = {
-  list: () => withIndex((index) => index.list()),
+  list: (options) => withIndex((index) => index.list(options)),
   get: (id) => withIndex((index) => index.get(id)),
   save: (note, folder) => withIndex((index) => index.save(note, folder)),
   listFolders: () =>
