@@ -47,6 +47,10 @@ const nodeVaultFileSystem: VaultFileSystem = {
       mtime: info.mtime,
     };
   },
+  rename: async (from, to) => {
+    const { rename } = await import("node:fs/promises");
+    await rename(from, to);
+  },
   remove: async (path, options) => {
     const { rm } = await import("node:fs/promises");
     await rm(path, { recursive: options?.recursive ?? false });

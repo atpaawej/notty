@@ -70,6 +70,19 @@ const createMemoryFileSystem = (): VaultFileSystem => {
         mtime: entry.mtime,
       };
     },
+    rename: async (from, to) => {
+      const entry = entries.get(from);
+      if (entry === undefined) throw new Error(`No such entry: ${from}`);
+      if (entries.has(to)) throw new Error(`Entry already exists: ${to}`);
+      const moved = [...entries.entries()].filter(
+        ([key]) => key === from || key.startsWith(`${from}/`),
+      );
+      for (const [key] of moved) entries.delete(key);
+      for (const [key, value] of moved) {
+        const next = key === from ? to : `${to}${key.slice(from.length)}`;
+        entries.set(next, value);
+      }
+    },
     remove: async (path, options) => {
       const entry = entries.get(path);
       if (entry === undefined) throw new Error(`No such entry: ${path}`);

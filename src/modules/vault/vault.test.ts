@@ -219,3 +219,76 @@ describe("Vault layer swapping", () => {
     expect(result.removed).toBe(0);
   });
 });
+
+describe("Vault folders", () => {
+  it("creates nested folders and lists the visible tree", async () => {
+    const paths = await ensureVault();
+
+    await withVault((vault) => vault.createFolder("Work/Projects"));
+    await mkdir(join(paths.root, ".secret"), { recursive: true });
+
+    await expect(withVault((vault) => vault.listFolders())).resolves.toEqual([
+      "Work",
+      "Work/Projects",
+    ]);
+    expect(await fileExists(join(paths.root, "Work", "Projects"))).toBe(true);
+  });
+
+  it("renames a folder subtree and keeps the note files inside", async () => {
+    const paths = await ensureVault();
+    await withVault((vault) => vault.createFolder("Work"));
+    await writeFile(join(paths.root, "Work", "note.md"), "body");
+
+    await expect(
+      withVault((vault) => vault.renameFolder("Work", "Office")),
+    ).resolves.toBe("Office");
+
+    expect(await fileExists(join(paths.root, "Work"))).toBe(false);
+    expect(await fileExists(join(paths.root, "Office", "note.md"))).toBe(true);
+    await expect(withVault((vault) => vault.listFolders())).resolves.toEqual([
+      "Office",
+    ]);
+  });
+
+  it("deletes a folder and everything beneath it", async () => {
+    const paths = await ensureVault();
+    await withVault((vault) => vault.createFolder("Work/Projects"));
+    await writeFile(join(paths.root, "Work", "Projects", "note.md"), "body");
+
+    await withVault((vault) => vault.deleteFolder("Work"));
+
+    expect(await fileExists(join(paths.root, "Work"))).toBe(false);
+    await expect(withVault((vault) => vault.listFolders())).resolves.toEqual([]);
+  });
+
+  it("refuses folder paths that escape the vault or hide from the sidebar", async () => {
+    await ensureVault();
+
+    await expect(
+      withVault((vault) => vault.createFolder("../outside")),
+    ).rejects.toBeDefined();
+    await expect(
+      withVault((vault) => vault.createFolder(".notty")),
+    ).rejects.toBeDefined();
+  });
+
+  it("supports the same folder lifecycle in the in-memory adapter", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const vault = yield* Vault;
+        yield* vault.createFolder("Work");
+        const created = yield* vault.listFolders();
+        yield* vault.renameFolder("Work", "Office");
+        const renamed = yield* vault.listFolders();
+        yield* vault.deleteFolder("Office");
+        const deleted = yield* vault.listFolders();
+        return { created, renamed, deleted };
+      }).pipe(Effect.provide(vaultMemoryLayer)),
+    );
+
+    expect(result.created).toEqual(["Work"]);
+    expect(result.renamed).toEqual(["Office"]);
+    expect(result.deleted).toEqual([]);
+  });
+});
+
