@@ -15,7 +15,10 @@
         { "path": "$DATA/notty/vault/.notty" },
         { "path": "$DATA/notty/vault/.notty/**" },
         { "path": "$DATA/notty/vault/.trash" },
-        { "path": "$DATA/notty/vault/.trash/**" }
+        { "path": "$DATA/notty/vault/.trash/**" },
+        { "path": "$TEMP/notty-update-*" },
+        { "path": "$TEMP/notty-update-*/**" },
+        { "path": "$TEMP/**" }
       ]
     },
     "fs:allow-exists",
