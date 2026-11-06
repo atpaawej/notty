@@ -26,15 +26,17 @@ export default function App() {
     let closing = false;
 
     if (isTauri()) {
-      // A normal quit gets one chance to write the last pending edit. The
-      // second close request sees `closing` and is allowed through.
+      // Intercept window close to flush pending edits, then destroy the window.
       void getCurrentWindow()
         .onCloseRequested(async (event) => {
           if (closing) return;
           event.preventDefault();
           closing = true;
-          await controller.current?.flush();
-          await getCurrentWindow().close();
+          try {
+            await controller.current?.flush();
+          } finally {
+            await getCurrentWindow().destroy();
+          }
         })
         .then((off) => {
           unlisten = off;
