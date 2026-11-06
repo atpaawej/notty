@@ -18,22 +18,17 @@ import {
   type MouseEvent,
 } from "react";
 import { createEditorExtensions } from "./extensions";
-
-/** Bytes and metadata for one pasted or dropped image. */
-export interface ImageUpload {
-  readonly bytes: Uint8Array;
-  readonly name: string;
-  readonly mimeType: string;
-}
-
-/** Where the vault stored an image, and the alt text a new image starts with. */
-export interface StoredImage {
-  /** Vault-relative reference inserted into the Markdown body. */
-  readonly path: string;
-  readonly alt: string;
-}
-
-export type SaveImage = (upload: ImageUpload) => Promise<StoredImage>;
+import {
+  isImageFile,
+  nameForSource,
+  persistIntakeUploads,
+  planImageIntake,
+  uploadsFromFiles,
+  type ClipboardImageReader,
+  type SaveImage,
+  type StoredImage,
+} from "./image-intake";
+import { createTransientImageExtension } from "./transient-images";
 
 export interface NoteEditorProps {
   /** Identity of the note. Changing it rebuilds the editor and its history. */
@@ -47,6 +42,11 @@ export interface NoteEditorProps {
    * the editor never decides where attachments live.
    */
   readonly saveImage?: SaveImage;
+  /**
+   * Reads pixels from the system clipboard when WebKitGTK supplies no image
+   * in the DOM paste event. Omit it in environments without native access.
+   */
+  readonly readClipboardImage?: ClipboardImageReader;
   /** Maps a vault-relative attachment reference to a webview URL. */
   readonly resolveImageSrc?: (path: string) => string;
   /** Put the cursor at the end of the body when the editor mounts. */
@@ -56,72 +56,6 @@ export interface NoteEditorProps {
 /** Keep the editor selection while a toolbar button is pressed. */
 const keepSelection = (event: MouseEvent<HTMLButtonElement>) => {
   event.preventDefault();
-};
-
-const IMAGE_FILE_PATTERN = /\.(?:avif|bmp|gif|jpe?g|png|svg|tiff?|webp)$/i;
-
-const isImageFile = (file: File): boolean =>
-  file.type.startsWith("image/") || IMAGE_FILE_PATTERN.test(file.name);
-
-/** Blob and data URLs die with the webview, so they must become files. */
-const isTransientImageSource = (source: string): boolean =>
-  /^(?:blob|data):/i.test(source);
-
-const IMAGE_SRC_PATTERN =
-  /<img\b[^>]*\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi;
-
-/** Pull image sources out of clipboard or drag HTML without a DOM parser. */
-const imageSourcesInHtml = (html: string): string[] => {
-  const sources: string[] = [];
-  for (const match of html.matchAll(IMAGE_SRC_PATTERN)) {
-    const source = (match[1] ?? match[2] ?? match[3] ?? "").trim();
-    if (source.length > 0) sources.push(source);
-  }
-  return sources;
-};
-
-const EXTENSIONS_BY_MIME: Readonly<Record<string, string>> = {
-  "image/avif": ".avif",
-  "image/bmp": ".bmp",
-  "image/gif": ".gif",
-  "image/jpeg": ".jpg",
-  "image/png": ".png",
-  "image/svg+xml": ".svg",
-  "image/tiff": ".tiff",
-  "image/webp": ".webp",
-};
-
-const fallbackImageName = (mimeType: string): string =>
-  `pasted-image${EXTENSIONS_BY_MIME[mimeType.toLowerCase()] ?? ".png"}`;
-
-const nameForSource = (source: string, mimeType: string): string => {
-  if (/^data:/i.test(source)) return fallbackImageName(mimeType);
-  const withoutQuery = source.split(/[?#]/)[0] ?? source;
-  const name = withoutQuery.slice(withoutQuery.lastIndexOf("/") + 1);
-  return IMAGE_FILE_PATTERN.test(name) ? name : fallbackImageName(mimeType);
-};
-
-/**
- * Clipboard and drag payloads expose files through `files` on most platforms
- * and only through `items` on some, so fall back rather than collect both.
- */
-const imageFilesIn = (transfer: DataTransfer | null): File[] => {
-  if (transfer === null) return [];
-
-  const files =
-    transfer.files.length > 0
-      ? Array.from(transfer.files)
-      : Array.from(transfer.items)
-          .filter(
-            (item) =>
-              item.kind === "file" &&
-              (item.type.startsWith("image/") ||
-                IMAGE_FILE_PATTERN.test(item.type)),
-          )
-          .map((item) => item.getAsFile())
-          .filter((file): file is File => file !== null);
-
-  return files.filter(isImageFile);
 };
 
 function IconChecklist() {
@@ -209,6 +143,7 @@ export function NoteEditor({
   body,
   onChange,
   saveImage,
+  readClipboardImage,
   resolveImageSrc,
   autoFocus = true,
 }: NoteEditorProps) {
@@ -216,6 +151,8 @@ export function NoteEditor({
   onChangeRef.current = onChange;
   const saveImageRef = useRef(saveImage);
   saveImageRef.current = saveImage;
+  const readClipboardImageRef = useRef(readClipboardImage);
+  readClipboardImageRef.current = readClipboardImage;
   const resolveImageSrcRef = useRef(resolveImageSrc);
   resolveImageSrcRef.current = resolveImageSrc;
   const editorRef = useRef<Editor | null>(null);
@@ -251,96 +188,38 @@ export function NoteEditor({
       .run();
   };
 
-  const insertImages = async (
-    files: ReadonlyArray<File>,
+  const storeUploads = async (
+    uploads: Parameters<typeof persistIntakeUploads>[0],
   ): Promise<void> => {
     const save = saveImageRef.current;
     if (save === undefined) return;
-
-    const stored: StoredImage[] = [];
-    for (const file of files) {
-      try {
-        const bytes = new Uint8Array(await file.arrayBuffer());
-        stored.push(
-          await save({
-            bytes,
-            name: file.name,
-            mimeType: file.type,
-          }),
-        );
-      } catch (cause) {
-        // There is no upload UI; a failed intake leaves the note untouched.
-        console.warn("Notty could not save an image", cause);
-      }
-    }
-
-    insertStored(stored);
-  };
-
-  /** Fetch a webview-only URL and persist its bytes as an attachment. */
-  const insertSources = async (
-    sources: ReadonlyArray<string>,
-  ): Promise<void> => {
-    const save = saveImageRef.current;
-    if (save === undefined) return;
-
-    const stored: StoredImage[] = [];
-    for (const source of sources) {
-      try {
-        const response = await fetch(source);
-        const blob = await response.blob();
-        const bytes = new Uint8Array(await blob.arrayBuffer());
-        const mimeType = blob.type.length > 0 ? blob.type : "image/png";
-        stored.push(
-          await save({
-            bytes,
-            name: nameForSource(source, mimeType),
-            mimeType,
-          }),
-        );
-      } catch (cause) {
-        console.warn("Notty could not save a pasted image", cause);
-      }
-    }
-
-    insertStored(stored);
+    insertStored(await persistIntakeUploads(uploads, save));
   };
 
   /**
-   * Image intake for both paste and drop. Files win: WebKit often exposes the
-   * same screenshot as both a file and an HTML blob, and saving it twice would
-   * create two attachments. HTML-only images (blob or data URLs) are fetched
-   * and stored; external http(s) sources stay as portable Markdown references.
+   * Image intake for paste, drop and the file picker. Files win: WebKit often
+   * exposes the same screenshot as both a file and an HTML blob, and saving it
+   * twice would create two attachments. HTML-only images (blob or data URLs)
+   * are fetched and stored; external http(s) sources stay as portable Markdown
+   * references. Paste may fall back to the native clipboard when the DOM
+   * payload is completely empty.
    */
-  const intakeTransfer = (transfer: DataTransfer | null): boolean => {
+  const intakeTransfer = (
+    transfer: DataTransfer | null,
+    allowNativeClipboard: boolean,
+  ): boolean => {
     if (saveImageRef.current === undefined) return false;
 
-    const files = imageFilesIn(transfer);
-    if (files.length > 0) {
-      void insertImages(files);
-      return true;
-    }
+    const plan = planImageIntake(transfer, {
+      allowNativeClipboard,
+      ...(readClipboardImageRef.current === undefined
+        ? {}
+        : { readClipboardImage: readClipboardImageRef.current }),
+    });
+    if (!plan.handled) return false;
 
-    if (transfer === null) return false;
-    const sources = imageSourcesInHtml(transfer.getData("text/html"));
-    if (sources.length === 0) return false;
-
-    const transient = sources.filter(isTransientImageSource);
-    if (transient.length > 0) {
-      void insertSources(transient);
-      return true;
-    }
-
-    const external = sources.filter((source) => /^https?:/i.test(source));
-    const local = sources.filter(
-      (source) => !/^https?:/i.test(source) && !isTransientImageSource(source),
-    );
-    if (local.length > 0) {
-      void insertSources(local);
-      return true;
-    }
-    if (external.length === 0) return false;
-    insertExternal(external);
+    insertExternal(plan.external);
+    void storeUploads(plan.uploads);
     return true;
   };
 
@@ -353,6 +232,7 @@ export function NoteEditor({
         ...createEditorExtensions(
           (path) => resolveImageSrcRef.current?.(path) ?? path,
         ),
+        createTransientImageExtension(() => saveImageRef.current),
         Markdown,
       ],
       content: body,
@@ -365,13 +245,13 @@ export function NoteEditor({
           "aria-multiline": "true",
         },
         handlePaste: (_view, event) => {
-          if (!intakeTransfer(event.clipboardData)) return false;
+          if (!intakeTransfer(event.clipboardData, true)) return false;
           event.preventDefault();
           return true;
         },
         handleDrop: (_view, event, _slice, moved) => {
           if (moved) return false;
-          if (!intakeTransfer(event.dataTransfer)) return false;
+          if (!intakeTransfer(event.dataTransfer, false)) return false;
           event.preventDefault();
           return true;
         },
@@ -410,7 +290,7 @@ export function NoteEditor({
   ): Promise<void> => {
     const files = Array.from(event.target.files ?? []).filter(isImageFile);
     event.target.value = "";
-    await insertImages(files);
+    await storeUploads(uploadsFromFiles(files));
   };
 
   const buttonClass = (isActive: boolean | undefined): string =>

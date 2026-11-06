@@ -7,7 +7,9 @@
  */
 import { convertFileSrc, isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { readImage } from "@tauri-apps/plugin-clipboard-manager";
 import { Effect, Layer, ManagedRuntime } from "effect";
+import type { ClipboardImageReader } from "./modules/editor";
 import {
   browserHotkeyPreferences,
   createHotkeyController,
@@ -106,7 +108,57 @@ export const noteStore: NoteStore = {
 
 let vaultRoot = "";
 
+/**
+ * Production adapter for the native clipboard seam. Linux WebKitGTK often
+ * delivers an empty clipboard payload for screenshots, so the paste handler
+ * falls back to the OS clipboard and receives PNG bytes from here. Outside
+ * Tauri, or when the clipboard holds no image, this is a quiet stub.
+ */
+const readClipboardImage: ClipboardImageReader = async () => {
+  if (!isTauri()) return null;
+
+  let image: Awaited<ReturnType<typeof readImage>> | null = null;
+  try {
+    image = await readImage();
+    const [{ width, height }, rgba] = await Promise.all([
+      image.size(),
+      image.rgba(),
+    ]);
+    if (width <= 0 || height <= 0) return null;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (context === null) return null;
+
+    context.putImageData(
+      new ImageData(new Uint8ClampedArray(rgba), width, height),
+      0,
+      0,
+    );
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob(resolve, "image/png"),
+    );
+    if (blob === null) return null;
+
+    return {
+      bytes: new Uint8Array(await blob.arrayBuffer()),
+      name: "pasted-image.png",
+      mimeType: "image/png",
+    };
+  } catch {
+    // Text on the clipboard is the common case; readImage rejects for it.
+    return null;
+  } finally {
+    if (image !== null) {
+      await image.close().catch(() => undefined);
+    }
+  }
+};
+
 const attachments: WorkspaceAttachments = {
+  readClipboardImage,
   saveImage: async (upload) => {
     const saved = await withVault((vault) =>
       vault.saveAttachment({

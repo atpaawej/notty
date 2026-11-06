@@ -14,6 +14,7 @@ import {
   renderTableToMarkdown,
 } from "@tiptap/extension-table";
 import StarterKit from "@tiptap/starter-kit";
+import { isTransientImageSource } from "./image-intake";
 
 /**
  * The stock table renderer adds its own leading and trailing newlines. The
@@ -41,6 +42,21 @@ const attachmentImage = (resolveImageSrc: (path: string) => string) =>
           ? resolveImageSrc(HTMLAttributes.src)
           : HTMLAttributes.src;
       return ["img", { ...HTMLAttributes, src }];
+    },
+    renderMarkdown(node) {
+      const src = typeof node.attrs?.src === "string" ? node.attrs.src : "";
+      // The watcher normally rewrites these first. If it has not finished (or
+      // failed), never leak a webview-only URL into the user's note file.
+      if (isTransientImageSource(src)) {
+        console.warn("Notty blocked a transient image URL from being saved");
+        return "";
+      }
+      const alt = typeof node.attrs?.alt === "string" ? node.attrs.alt : "";
+      const title =
+        typeof node.attrs?.title === "string" ? node.attrs.title : "";
+      return title.length > 0
+        ? `![${alt}](${src} "${title}")`
+        : `![${alt}](${src})`;
     },
   }).configure({ allowBase64: false });
 

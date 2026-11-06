@@ -6,10 +6,11 @@
  * round-trip. No TipTap or ProseMirror type escapes this folder.
  */
 export { NoteEditor } from "./NoteEditor";
+export type { NoteEditorProps } from "./NoteEditor";
 export type {
+  ClipboardImageReader,
   ImageUpload,
-  NoteEditorProps,
   SaveImage,
   StoredImage,
-} from "./NoteEditor";
+} from "./image-intake";
 export { normalizeMarkdown } from "./markdown";

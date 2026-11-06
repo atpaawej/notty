@@ -39,6 +39,8 @@ No ProseMirror editor instance escapes the module. No caller may read editor int
 - Writes go through the vault module; the editor does not decide where attachments live.
 - The editor receives the resulting relative reference and inserts it as an image node. Markdown keeps that reference; only HTML rendering maps it to a webview URL through a resolver supplied by the composition root.
 - Base64 parsing is disabled, so an inline image payload can never enter a note through the editor.
+- On Linux, WebKitGTK can deliver an empty paste payload for screenshots. When the DOM payload has no data at all, the editor asks the composition root's clipboard reader for system pixels. The Tauri adapter reads the OS clipboard and encodes PNG bytes; non-Tauri and test adapters return `null` without failing the paste.
+- A document watcher persists any image whose `src` is a transient `blob:` or `data:` URL, then rewrites the node to the relative attachment path. Markdown rendering drops transient URLs as a final guard, so an ephemeral webview URL is never written to a note file.
 - Alt text defaults to the original filename and is edited from the toolbar while an image is selected.
 - No resizing, no cropping, no lightbox in v1.
 
