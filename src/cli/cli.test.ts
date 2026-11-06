@@ -169,6 +169,14 @@ describe("parseArgv", () => {
 });
 
 describe("runCli output", () => {
+  it("points terminal users at the desktop binary in help", async () => {
+    const help = hooks(fakeClient());
+    expect(await runCli(["help"], help)).toBe(0);
+    expect(help.out.join("")).toContain(
+      "Desktop app: run 'notty-desktop' or launch Notty from your applications menu.",
+    );
+  });
+
   it("prints tab-separated summaries by default and JSON on request", async () => {
     const client = fakeClient();
     const text = hooks(client);

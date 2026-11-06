@@ -19,7 +19,7 @@ CI runs the frontend checks and `cargo fmt` / `clippy` / `check` on every PR.
 
 ## CLI
 
-`npm run build:cli` bundles the terminal client to `dist-cli/notty.js`; the Debian package installs it as `/usr/bin/notty`. It reads and writes the same XDG vault as the app, with SQLite in WAL mode so both can run at once.
+`npm run build:cli` bundles the terminal client to `dist-cli/notty.js`; the Debian package installs it as `/usr/bin/notty`, alongside the desktop app at `/usr/bin/notty-desktop` (also launched from your applications menu). It reads and writes the same XDG vault as the app, with SQLite in WAL mode so both can run at once.
 
 ```bash
 notty list                       # id, title, folder per line

@@ -440,4 +440,6 @@ Options:
   --json       Print machine-readable JSON instead of plain text.
   --help       Show this help.
   --version    Show the CLI version.
+
+Desktop app: run 'notty-desktop' or launch Notty from your applications menu.
 `;
