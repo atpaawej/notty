@@ -5,8 +5,16 @@
  * note-index adapter adds SQLite. The rest of the app sees only `NoteStore`
  * and the attachment intake handed to the editor.
  */
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { convertFileSrc, isTauri } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Effect, Layer, ManagedRuntime } from "effect";
+import {
+  browserHotkeyPreferences,
+  createHotkeyController,
+  GlobalHotkey,
+  hotkeyTauriLayer,
+  type HotkeyController,
+} from "./modules/hotkey";
 import { ATTACHMENTS_DIRECTORY } from "./modules/note-file";
 import {
   NoteIndex,
@@ -25,6 +33,7 @@ import type { NoteStore, WorkspaceAttachments } from "./modules/workspace";
 const vaultLayer = vaultTauriLayer;
 const indexLayer = noteIndexTauriLayer.pipe(Layer.provide(vaultLayer));
 const runtime = ManagedRuntime.make(Layer.merge(indexLayer, vaultLayer));
+const hotkeyRuntime = ManagedRuntime.make(hotkeyTauriLayer);
 
 const withIndex = <A>(
   run: (index: NoteIndexShape) => Effect.Effect<A, NoteIndexError>,
@@ -100,10 +109,32 @@ const attachments: WorkspaceAttachments = {
       : path,
 };
 
+/** Raise the window even when it is behind another app or minimised. */
+const focusMainWindow = async (): Promise<void> => {
+  if (!isTauri()) return;
+  const window = getCurrentWindow();
+  const quietly = async (action: () => Promise<void>): Promise<void> => {
+    try {
+      await action();
+    } catch {
+      // A no-op state (already visible, not minimised) must not stop the
+      // remaining raise steps.
+    }
+  };
+  try {
+    await quietly(() => window.unminimize());
+    await quietly(() => window.show());
+    await window.setFocus();
+  } catch (cause) {
+    console.warn("Notty could not raise its window", cause);
+  }
+};
+
 /** Resolve the vault location once, before the UI needs image URLs. */
 export interface AppRuntime {
   readonly store: NoteStore;
   readonly attachments: WorkspaceAttachments;
+  readonly hotkey: HotkeyController;
 }
 
 export const initializeRuntime = async (): Promise<AppRuntime> => {
@@ -114,5 +145,18 @@ export const initializeRuntime = async (): Promise<AppRuntime> => {
       return paths.root;
     }),
   );
-  return { store: noteStore, attachments };
+
+  const hotkeyService = await hotkeyRuntime.runPromise(
+    Effect.gen(function* () {
+      return yield* GlobalHotkey;
+    }),
+  );
+  const hotkey = createHotkeyController(
+    hotkeyService,
+    browserHotkeyPreferences,
+    { onPress: focusMainWindow },
+  );
+  await hotkey.ready;
+
+  return { store: noteStore, attachments, hotkey };
 };

@@ -29,7 +29,12 @@
     "fs:allow-write-text-file",
     "sql:default",
     "sql:allow-execute",
+    "global-shortcut:allow-register",
+    "global-shortcut:allow-unregister",
     "core:window:allow-close",
-    "core:window:allow-destroy"
+    "core:window:allow-destroy",
+    "core:window:allow-show",
+    "core:window:allow-unminimize",
+    "core:window:allow-set-focus"
   ]
 }
