@@ -216,9 +216,9 @@ describe("unknown frontmatter", () => {
 describe("auto-title", () => {
   const created = "2026-11-05T09:14:00Z";
 
-  it("combines the creation date with the first body words", () => {
+  it("uses the first body words without a date prefix", () => {
     expect(deriveAutoTitle(created, "Milk, eggs, the good bread.")).toBe(
-      "2026-11-05 — Milk, eggs, the good bread.",
+      "Milk, eggs, the good bread.",
     );
   });
 
@@ -227,23 +227,47 @@ describe("auto-title", () => {
       deriveAutoTitle(created, "one two three four five six seven", {
         maxWords: 3,
       }),
-    ).toBe("2026-11-05 — one two three");
+    ).toBe("one two three");
   });
 
   it("accepts a Note-shaped value", () => {
     expect(deriveAutoTitle({ created, body: "First words of a note" })).toBe(
-      "2026-11-05 — First words of a note",
+      "First words of a note",
     );
   });
 
-  it("falls back to the date when the body has no words", () => {
-    expect(deriveAutoTitle(created, "   \n  ")).toBe("2026-11-05");
+  it("falls back to New Note when the body has no words", () => {
+    expect(deriveAutoTitle(created, "   \n  ")).toBe("New Note");
   });
 
-  it("accepts a Date and formats it as UTC", () => {
+  it("accepts a Date and ignores it in the title", () => {
     expect(deriveAutoTitle(new Date("2026-11-05T23:30:00Z"), "Late note")).toBe(
-      "2026-11-05 — Late note",
+      "Late note",
     );
+  });
+
+  it("strips headings, list markers, checkboxes, quotes and images", () => {
+    expect(deriveAutoTitle(created, "## Shopping list")).toBe("Shopping list");
+    expect(deriveAutoTitle(created, "- [ ] Buy groceries")).toBe(
+      "Buy groceries",
+    );
+    expect(deriveAutoTitle(created, "- [x] Buy eggs")).toBe("Buy eggs");
+    expect(deriveAutoTitle(created, "* Buy milk")).toBe("Buy milk");
+    expect(deriveAutoTitle(created, "1. Call the plumber")).toBe(
+      "Call the plumber",
+    );
+    expect(deriveAutoTitle(created, "> A quoted thought")).toBe(
+      "A quoted thought",
+    );
+    expect(deriveAutoTitle(created, "![receipt](attachments/one.png)")).toBe(
+      "New Note",
+    );
+  });
+
+  it("uses the first non-empty line and strips inline emphasis", () => {
+    expect(
+      deriveAutoTitle(created, "\n\n**Bold** and *italic* opening\nSecond line."),
+    ).toBe("Bold and italic opening");
   });
 
   it("is never used by parse", () => {
