@@ -12,7 +12,7 @@ import {
   useSyncExternalStore,
   type MouseEvent as ReactMouseEvent,
 } from "react";
-import { NoteEditor } from "../editor";
+import { NoteEditor, type ImageUpload, type StoredImage } from "../editor";
 import type { NoteSummary } from "../note-index";
 import {
   createWorkspace,
@@ -20,8 +20,19 @@ import {
   type WorkspaceController,
 } from "./workspace";
 
+/** The attachment intake the composition root supplies to the editor. */
+export interface WorkspaceAttachments {
+  readonly saveImage: (upload: ImageUpload) => Promise<StoredImage>;
+  readonly imageSrc: (path: string) => string;
+}
+
 export interface WorkspaceProps {
   readonly store: NoteStore;
+  /**
+   * Image intake and rendering. Omitted when the runtime has no attachment
+   * storage; the editor then ignores pastes and drops of images.
+   */
+  readonly attachments?: WorkspaceAttachments;
   /**
    * Handed the controller so the composition root can flush pending edits
    * before the window closes. Called with `null` on unmount.
@@ -443,7 +454,7 @@ function NoteList({
   );
 }
 
-export function Workspace({ store, onController }: WorkspaceProps) {
+export function Workspace({ store, attachments, onController }: WorkspaceProps) {
   const controller = useMemo(() => createWorkspace(store), [store]);
   const state = useSyncExternalStore(
     controller.subscribe,
@@ -587,6 +598,8 @@ export function Workspace({ store, onController }: WorkspaceProps) {
               noteId={selected.id}
               body={selected.body}
               onChange={controller.setBody}
+              saveImage={attachments?.saveImage}
+              resolveImageSrc={attachments?.imageSrc}
             />
           </div>
         </main>

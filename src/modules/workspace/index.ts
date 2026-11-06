@@ -5,7 +5,7 @@
  * seam it needs, and the framework-free controller behind it.
  */
 export { Workspace } from "./Workspace";
-export type { WorkspaceProps } from "./Workspace";
+export type { WorkspaceAttachments, WorkspaceProps } from "./Workspace";
 export { createWorkspace } from "./workspace";
 export type {
   EditorNote,

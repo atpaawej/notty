@@ -5,11 +5,11 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useCallback, useEffect, useRef } from "react";
-import { noteStore } from "./app-runtime";
+import type { AppRuntime } from "./app-runtime";
 import { Workspace, type WorkspaceController } from "./modules/workspace";
 import "./styles.css";
 
-export default function App() {
+export default function App({ runtime }: { readonly runtime: AppRuntime }) {
   const controller = useRef<WorkspaceController | null>(null);
 
   const onController = useCallback((next: WorkspaceController | null) => {
@@ -49,5 +49,11 @@ export default function App() {
     };
   }, []);
 
-  return <Workspace store={noteStore} onController={onController} />;
+  return (
+    <Workspace
+      store={runtime.store}
+      attachments={runtime.attachments}
+      onController={onController}
+    />
+  );
 }

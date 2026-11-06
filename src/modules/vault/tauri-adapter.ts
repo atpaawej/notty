@@ -14,6 +14,7 @@ import {
   readDir,
   remove,
   rename,
+  writeFile,
 } from "@tauri-apps/plugin-fs";
 import { Effect, Layer } from "effect";
 import {
@@ -46,6 +47,7 @@ const tauriVaultFileSystem: VaultFileSystem = {
       mtime: info.mtime,
     };
   },
+  writeFile: (path, contents) => writeFile(path, contents),
   rename: (from, to) => rename(from, to),
   remove: async (path, options) => {
     await remove(path, { recursive: options?.recursive ?? false });

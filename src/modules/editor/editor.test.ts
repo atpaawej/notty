@@ -122,6 +122,36 @@ describe("Table round-trip", () => {
   });
 });
 
+describe("Image round-trip", () => {
+  const image =
+    "![receipt.png](attachments/3b1e7f0e-6a2d-4d1a-9a0e-1b2c3d4e5f60.png)";
+
+  it("preserves the relative attachment path and alt text", () => {
+    expect(normalizeMarkdown(image)).toBe(image);
+  });
+
+  it("keeps edited alt text", () => {
+    const edited = "![Quarterly report](attachments/3b1e7f0e.png)";
+
+    expect(normalizeMarkdown(edited)).toBe(edited);
+  });
+
+  it("keeps images inline with surrounding blocks", () => {
+    const withText = ["Before the photo.", "", image, "", "After."].join("\n");
+    const saved = normalizeMarkdown(withText);
+
+    expect(saved).toContain(image);
+    expect(normalizeMarkdown(saved)).toBe(saved);
+  });
+
+  it("never turns an attachment reference into inline base64", () => {
+    const saved = normalizeMarkdown(image);
+
+    expect(saved).not.toContain("data:");
+    expect(saved).not.toContain("base64");
+  });
+});
+
 describe("Checklist and table together", () => {
   it("round-trips both through serialize(parse(x))", () => {
     const once = normalizeMarkdown(mixed);

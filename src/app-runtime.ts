@@ -2,9 +2,12 @@
  * Browser-side production wiring: one composed Layer for the WebView.
  *
  * The Tauri vault adapter supplies the location and filesystem; the Tauri
- * note-index adapter adds SQLite. The rest of the app sees only `NoteStore`.
+ * note-index adapter adds SQLite. The rest of the app sees only `NoteStore`
+ * and the attachment intake handed to the editor.
  */
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { Effect, Layer, ManagedRuntime } from "effect";
+import { ATTACHMENTS_DIRECTORY } from "./modules/note-file";
 import {
   NoteIndex,
   noteIndexTauriLayer,
@@ -17,7 +20,7 @@ import {
   type VaultError,
   type VaultShape,
 } from "./modules/vault";
-import type { NoteStore } from "./modules/workspace";
+import type { NoteStore, WorkspaceAttachments } from "./modules/workspace";
 
 const vaultLayer = vaultTauriLayer;
 const indexLayer = noteIndexTauriLayer.pipe(Layer.provide(vaultLayer));
@@ -73,4 +76,42 @@ export const noteStore: NoteStore = {
     await withVault((vault) => vault.deleteFolder(folder));
     await folderChanged();
   },
+};
+
+let vaultRoot = "";
+
+const attachments: WorkspaceAttachments = {
+  saveImage: async (upload) => {
+    const saved = await withVault((vault) =>
+      vault.saveAttachment({
+        bytes: upload.bytes,
+        name: upload.name,
+        mimeType: upload.mimeType,
+      }),
+    );
+    return { path: saved.path, alt: saved.name };
+  },
+  // Only vault-relative attachment references are rewritten; external image
+  // URLs in a note are left alone.
+  imageSrc: (path) =>
+    path.startsWith(`${ATTACHMENTS_DIRECTORY}/`)
+      ? convertFileSrc(`${vaultRoot}/${path}`)
+      : path,
+};
+
+/** Resolve the vault location once, before the UI needs image URLs. */
+export interface AppRuntime {
+  readonly store: NoteStore;
+  readonly attachments: WorkspaceAttachments;
+}
+
+export const initializeRuntime = async (): Promise<AppRuntime> => {
+  vaultRoot = await runtime.runPromise(
+    Effect.gen(function* () {
+      const vault = yield* Vault;
+      const paths = yield* vault.location();
+      return paths.root;
+    }),
+  );
+  return { store: noteStore, attachments };
 };
