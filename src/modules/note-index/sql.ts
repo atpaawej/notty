@@ -8,6 +8,18 @@ import type { IndexedNote, NoteSummary } from "./service";
 
 export const SCHEMA_VERSION = 3;
 
+/**
+ * Connection settings applied before the index is read.
+ *
+ * WAL lets the desktop app and the CLI read and write the same database
+ * without blocking each other; the busy timeout turns a short write overlap
+ * into a wait instead of an immediate SQLITE_BUSY failure.
+ */
+export const CONNECTION_PRAGMAS: ReadonlyArray<string> = [
+  "PRAGMA journal_mode = WAL",
+  "PRAGMA busy_timeout = 5000",
+];
+
 export const CREATE_SCHEMA: ReadonlyArray<string> = [
   `CREATE TABLE IF NOT EXISTS notes (
     id TEXT PRIMARY KEY NOT NULL,
@@ -41,6 +53,7 @@ export const DROP_SCHEMA: ReadonlyArray<string> = [
 
 export const DELETE_ALL_NOTES = "DELETE FROM notes";
 export const DELETE_ALL_FTS = "DELETE FROM notes_fts";
+export const DELETE_NOTE = "DELETE FROM notes WHERE id = ?";
 
 const SUMMARY_COLUMNS =
   "notes.id, notes.title, notes.created, notes.modified, notes.pinned, notes.archived, notes.folder";

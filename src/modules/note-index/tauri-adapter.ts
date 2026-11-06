@@ -16,6 +16,7 @@ import {
   readDir,
   readTextFile,
   remove,
+  rename,
   writeTextFile,
 } from "@tauri-apps/plugin-fs";
 import Database from "@tauri-apps/plugin-sql";
@@ -53,6 +54,7 @@ const tauriStorage: NoteStorage = {
       return null;
     }
   },
+  rename: (from, to) => rename(from, to),
   remove: (path) => remove(path),
 };
 

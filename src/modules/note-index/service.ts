@@ -31,6 +31,10 @@ export interface ListOptions {
   readonly folder?: string;
   /** Include archived notes. Defaults to false. */
   readonly includeArchived?: boolean;
+  /** Exact archive state. Overrides `includeArchived` when set. */
+  readonly archived?: boolean;
+  /** Exact pin state. Omit for both. */
+  readonly pinned?: boolean;
 }
 
 export interface NoteIndexShape {
@@ -46,6 +50,16 @@ export interface NoteIndexShape {
     query: string,
     limit?: number,
   ) => Effect.Effect<ReadonlyArray<NoteSummary>, NoteIndexError>;
+  /**
+   * Move a note into the vault's Trash and drop it from the index. The file
+   * keeps its original folder path beneath `.trash`, so `restore` can put it
+   * back where it came from.
+   */
+  readonly trash: (id: string) => Effect.Effect<void, NoteIndexError>;
+  /** Put a trashed note back, or `null` when the id is not in the Trash. */
+  readonly restore: (
+    id: string,
+  ) => Effect.Effect<IndexedNote | null, NoteIndexError>;
   readonly rebuild: () => Effect.Effect<void, NoteIndexError>;
 }
 

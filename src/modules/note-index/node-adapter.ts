@@ -59,6 +59,10 @@ const nodeStorage: NoteStorage = {
       throw cause;
     }
   },
+  rename: async (from, to) => {
+    const { rename } = await import("node:fs/promises");
+    await rename(from, to);
+  },
   remove: async (path) => {
     const { rm } = await import("node:fs/promises");
     await rm(path, { force: true });
