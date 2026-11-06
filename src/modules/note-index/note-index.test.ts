@@ -505,6 +505,20 @@ describe("note-index file-backed startup recovery", () => {
     ).resolves.toMatchObject({ note: { body: "changed in the index" } });
   });
 
+  it("opens and writes concurrently on an empty vault", async () => {
+    const count = 8;
+    await Promise.all(
+      Array.from({ length: count }, (_, index) =>
+        withIndex(layer(), (noteIndex) =>
+          noteIndex.save(makeNote(`concurrent-${index}`), ""),
+        ),
+      ),
+    );
+
+    const notes = await withIndex(layer(), (noteIndex) => noteIndex.list());
+    expect(notes).toHaveLength(count);
+  });
+
   it("writes the file before the index and leaves no row on index failure", async () => {
     const note = makeNote("ordered");
     const databasePath = join(vaultRoot, "notty.db");

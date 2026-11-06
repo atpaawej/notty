@@ -15,9 +15,13 @@ export const SCHEMA_VERSION = 3;
  * without blocking each other; the busy timeout turns a short write overlap
  * into a wait instead of an immediate SQLITE_BUSY failure.
  */
+export const BUSY_TIMEOUT_PRAGMA = "PRAGMA busy_timeout = 5000";
+export const WAL_PRAGMA = "PRAGMA journal_mode = WAL";
 export const CONNECTION_PRAGMAS: ReadonlyArray<string> = [
-  "PRAGMA journal_mode = WAL",
-  "PRAGMA busy_timeout = 5000",
+  // The timeout must be set first so switching to WAL can wait for another
+  // process instead of failing immediately.
+  BUSY_TIMEOUT_PRAGMA,
+  WAL_PRAGMA,
 ];
 
 export const CREATE_SCHEMA: ReadonlyArray<string> = [

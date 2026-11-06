@@ -41,6 +41,7 @@ import {
   SELECT_FINGERPRINTS,
   TABLE_COUNT,
   UPSERT_NOTE,
+  WAL_PRAGMA,
   ftsQuery,
   fuzzyFtsQuery,
   searchTokens,
@@ -92,53 +93,73 @@ export const openNoteIndex = async (
   const root = stripTrailingSlash(options.root);
   let driver: SqlDriver | null = null;
   let current = false;
-  let healthy = false;
+
+  const openDriver = async (): Promise<SqlDriver> => {
+    const opened = await options.openDriver();
+    await applyConnectionPragmas(opened);
+    return opened;
+  };
 
   try {
-    driver = await options.openDriver();
-    await applyConnectionPragmas(driver);
-    healthy = await isHealthy(driver);
-    current =
-      healthy && (await isCurrent(driver, root, options.storage));
+    driver = await openDriver();
   } catch {
-    // A failed open, query or integrity check means the index is unusable.
-    current = false;
-    healthy = false;
+    // The file cannot be opened at all; recreate it below.
   }
 
-  if (!current) {
-    if (healthy && driver !== null) {
-      // A stale index is rebuilt in place. Keeping the open connection means
-      // a concurrently running desktop app is not left holding a deleted file.
-      await resetSchema(driver);
-      await replaceAll(driver, root, options.storage);
-    } else {
-      if (driver !== null) {
+  if (driver !== null) {
+    try {
+      current =
+        (await isIntact(driver)) &&
+        (await isHealthy(driver)) &&
+        (await isCurrent(driver, root, options.storage));
+    } catch {
+      current = false;
+    }
+
+    if (!current) {
+      try {
+        // A missing or stale schema is rebuilt in place. Keeping the open
+        // connection means a concurrently starting app is not left holding a
+        // deleted file. A new database is intact but empty, so simultaneous
+        // first runs all create the schema instead of deleting each other's.
+        await resetSchema(driver);
+      } catch {
+        // The database survived opening but cannot hold a schema, so it is
+        // corrupt. Recreate it below.
         await driver.close().catch(() => undefined);
+        driver = null;
       }
-      if (options.databasePath !== null) {
-        await options.storage.remove(options.databasePath).catch(() => undefined);
-      }
-      driver = await options.openDriver();
-      await applyConnectionPragmas(driver);
-      await resetSchema(driver);
-      await replaceAll(driver, root, options.storage);
     }
   }
 
-  const open = driver;
-  if (open === null) {
-    throw new Error("The index driver could not be opened");
+  if (driver === null) {
+    if (options.databasePath !== null) {
+      await options.storage.remove(options.databasePath).catch(() => undefined);
+    }
+    driver = await openDriver();
+    await resetSchema(driver);
   }
+
+  if (!current) {
+    await replaceAll(driver, root, options.storage);
+  }
+
   return {
-    index: makeNoteIndex(open, root, options.storage),
-    close: () => open.close(),
+    index: makeNoteIndex(driver, root, options.storage),
+    close: () => driver.close(),
   };
 };
 
 const applyConnectionPragmas = async (driver: SqlDriver): Promise<void> => {
   for (const sql of CONNECTION_PRAGMAS) {
-    await driver.execute({ sql });
+    try {
+      await driver.execute({ sql });
+    } catch (cause) {
+      // Switching to WAL needs a brief exclusive lock. When another process
+      // is opening at the same moment, keep the connection: the busy timeout
+      // serialises writes, and a later open can switch the journal mode.
+      if (sql !== WAL_PRAGMA) throw cause;
+    }
   }
 };
 
@@ -396,13 +417,17 @@ const resetSchema = async (driver: SqlDriver): Promise<void> => {
   await driver.transaction(statements);
 };
 
-const isHealthy = async (driver: SqlDriver): Promise<boolean> => {
+/** True when SQLite itself reports the database as sound. */
+const isIntact = async (driver: SqlDriver): Promise<boolean> => {
   const integrity = await driver.select<Record<string, unknown>>({
     sql: INTEGRITY_CHECK,
   });
   const verdict = integrity[0] === undefined ? undefined : Object.values(integrity[0])[0];
-  if (verdict !== "ok") return false;
+  return verdict === "ok";
+};
 
+/** True when the schema is present at the current version. */
+const isHealthy = async (driver: SqlDriver): Promise<boolean> => {
   const version = await driver.select<{ user_version: number }>({
     sql: SCHEMA_VERSION_QUERY,
   });

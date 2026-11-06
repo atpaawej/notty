@@ -71,7 +71,9 @@ const nodeStorage: NoteStorage = {
 
 const openNodeDriver = async (database: string): Promise<SqlDriver> => {
   const { DatabaseSync } = await import("node:sqlite");
-  const db = new DatabaseSync(database);
+  // Set the busy timeout at open as well as with a pragma: the constructor
+  // covers the moment before the first statement runs.
+  const db = new DatabaseSync(database, { timeout: 5_000 });
 
   const execute = (statement: SqlStatement): void => {
     db.prepare(statement.sql).run(...(statement.params ?? []));
