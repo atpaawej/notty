@@ -367,6 +367,31 @@ body {
   letter-spacing: -0.02em;
 }
 
+.note-list-search {
+  padding: 0 12px 10px;
+}
+
+.note-list-search input {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: 7px;
+  background: var(--surface-sidebar);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.note-list-search input::placeholder {
+  color: var(--text-secondary);
+}
+
+.note-list-search input:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
 /* The one loud element: the Apple-blue compose disc. */
 .compose-button {
   display: grid;

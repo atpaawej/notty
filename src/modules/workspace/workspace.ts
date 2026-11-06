@@ -21,6 +21,11 @@ export interface NoteStore {
   }) => Promise<ReadonlyArray<NoteSummary>>;
   readonly get: (id: string) => Promise<IndexedNote | null>;
   readonly save: (note: Note, folder: string) => Promise<IndexedNote>;
+  /** Full-text search over note titles and bodies, from the index only. */
+  readonly search: (
+    query: string,
+    limit?: number,
+  ) => Promise<ReadonlyArray<NoteSummary>>;
   /** Every folder as a vault-relative POSIX path, sorted. */
   readonly listFolders: () => Promise<ReadonlyArray<string>>;
   readonly createFolder: (folder: string) => Promise<void>;
@@ -47,6 +52,12 @@ export interface WorkspaceState {
   readonly showArchived: boolean;
   readonly selectedId: string | null;
   readonly selected: EditorNote | null;
+  /** The text currently in the search field; `""` means not searching. */
+  readonly searchQuery: string;
+  /** Index matches for the current query, newest query wins. */
+  readonly searchResults: ReadonlyArray<NoteSummary>;
+  /** True between a query change and its debounced result. */
+  readonly searching: boolean;
   /** False while the initial list is still being read. */
   readonly ready: boolean;
 }
@@ -54,6 +65,8 @@ export interface WorkspaceState {
 export interface WorkspaceOptions {
   /** Edit-to-save delay. The product budget is 300–500 ms. */
   readonly debounceMs?: number;
+  /** Search-as-you-type delay. Defaults to 150 ms. */
+  readonly searchDebounceMs?: number;
   /** How many body words the auto-title keeps. Defaults to 6. */
   readonly autoTitleWords?: number;
   /** Clock seam. Defaults to the system clock. */
@@ -74,6 +87,8 @@ export interface WorkspaceController {
   readonly selectFolder: (folder: string | null) => void;
   /** Show archived notes; the normal list hides them. */
   readonly selectArchive: () => void;
+  /** Set the search text; results arrive after the search debounce. */
+  readonly setSearchQuery: (query: string) => void;
   /** Pin or unpin a note with one action. */
   readonly togglePin: (id: string) => Promise<void>;
   /** Hide a note from the normal list, or bring it back. */
@@ -104,6 +119,7 @@ interface PendingSave {
 }
 
 const DEFAULT_DEBOUNCE_MS = 400;
+const DEFAULT_SEARCH_DEBOUNCE_MS = 150;
 
 const defaultNewId = (): string => {
   const crypto = globalThis.crypto;
@@ -233,6 +249,8 @@ export function createWorkspace(
   options: WorkspaceOptions = {},
 ): WorkspaceController {
   const debounceMs = options.debounceMs ?? DEFAULT_DEBOUNCE_MS;
+  const searchDebounceMs =
+    options.searchDebounceMs ?? DEFAULT_SEARCH_DEBOUNCE_MS;
   const autoTitleWords = options.autoTitleWords ?? 6;
   const now = options.now ?? (() => new Date());
   const newId = options.newId ?? defaultNewId;
@@ -244,6 +262,9 @@ export function createWorkspace(
     showArchived: false,
     selectedId: null,
     selected: null,
+    searchQuery: "",
+    searchResults: [],
+    searching: false,
     ready: false,
   };
   /** Every known note, including archived and other folders. */
@@ -254,6 +275,8 @@ export function createWorkspace(
   let draftFolder = "";
   let pending: PendingSave | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
+  let searchTimer: ReturnType<typeof setTimeout> | null = null;
+  let searchGeneration = 0;
   let chain: Promise<void> = Promise.resolve();
 
   let markReady: () => void = () => undefined;
@@ -346,6 +369,9 @@ export function createWorkspace(
         );
 
   const createNote = async (): Promise<void> => {
+    // A captured note should be visible immediately, not hidden behind an
+    // existing search result list.
+    if (state.searchQuery.length > 0) setSearchQuery("");
     // Queue the previous draft's save without waiting for disk: capture must
     // not pause behind an unrelated write.
     if (draft !== null) void flush();
@@ -398,6 +424,7 @@ export function createWorkspace(
   };
 
   const selectFolder = (folder: string | null): void => {
+    if (state.searchQuery.length > 0) setSearchQuery("");
     update({
       ...state,
       selectedFolder: folder,
@@ -407,12 +434,50 @@ export function createWorkspace(
   };
 
   const selectArchive = (): void => {
+    if (state.searchQuery.length > 0) setSearchQuery("");
     update({
       ...state,
       selectedFolder: null,
       showArchived: true,
       notes: viewOf(allNotes, null, true),
     });
+  };
+
+  const setSearchQuery = (query: string): void => {
+    if (searchTimer !== null) {
+      clearTimeout(searchTimer);
+      searchTimer = null;
+    }
+    searchGeneration += 1;
+    const generation = searchGeneration;
+    const trimmed = query.trim();
+
+    if (trimmed.length === 0) {
+      update({
+        ...state,
+        searchQuery: query,
+        searchResults: [],
+        searching: false,
+      });
+      return;
+    }
+
+    update({ ...state, searchQuery: query, searching: true });
+    searchTimer = setTimeout(() => {
+      searchTimer = null;
+      void (async () => {
+        try {
+          const results = await store.search(trimmed);
+          // A later keystroke or a cleared field owns the result slot now.
+          if (generation !== searchGeneration) return;
+          update({ ...state, searchResults: results, searching: false });
+        } catch (cause) {
+          if (generation !== searchGeneration) return;
+          console.warn("Notty could not search notes", cause);
+          update({ ...state, searchResults: [], searching: false });
+        }
+      })();
+    }, searchDebounceMs);
   };
 
   const togglePin = async (id: string): Promise<void> => {
@@ -693,6 +758,7 @@ export function createWorkspace(
     selectNote,
     selectFolder,
     selectArchive,
+    setSearchQuery,
     togglePin,
     setArchived,
     duplicateNote,
@@ -704,6 +770,10 @@ export function createWorkspace(
     setTitle,
     flush,
     dispose: () => {
+      if (searchTimer !== null) {
+        clearTimeout(searchTimer);
+        searchTimer = null;
+      }
       void flush();
     },
   };

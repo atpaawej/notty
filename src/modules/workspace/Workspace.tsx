@@ -371,8 +371,11 @@ function NoteList({
   notes,
   selectedId,
   ready,
+  searchQuery,
+  searching,
   onCreate,
   onSelect,
+  onSearchChange,
   onTogglePin,
   onDuplicate,
   onSetArchived,
@@ -381,12 +384,16 @@ function NoteList({
   readonly notes: ReadonlyArray<NoteSummary>;
   readonly selectedId: string | null;
   readonly ready: boolean;
+  readonly searchQuery: string;
+  readonly searching: boolean;
   readonly onCreate: () => void;
   readonly onSelect: (id: string) => void;
+  readonly onSearchChange: (query: string) => void;
   readonly onTogglePin: (id: string) => void;
   readonly onDuplicate: (id: string) => void;
   readonly onSetArchived: (id: string, archived: boolean) => void;
 }) {
+  const hasQuery = searchQuery.trim().length > 0;
   return (
     <section className="note-list" aria-label="Note list">
       <header className="note-list-header">
@@ -402,11 +409,39 @@ function NoteList({
         </button>
       </header>
 
+      <div className="note-list-search">
+        <input
+          type="search"
+          value={searchQuery}
+          aria-label="Search notes"
+          placeholder="Search"
+          onChange={(event) => onSearchChange(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              event.preventDefault();
+              onSearchChange("");
+            }
+          }}
+        />
+      </div>
+
       {notes.length === 0 ? (
         <div className="note-list-empty">
-          <h2>{ready ? "No notes yet" : "Opening your vault…"}</h2>
-          {ready ? (
-            <p>Press Ctrl+N or the compose button to start writing. Everything saves automatically.</p>
+          <h2>
+            {!ready
+              ? "Opening your vault…"
+              : hasQuery
+                ? searching
+                  ? "Searching…"
+                  : "No matches"
+                : "No notes yet"}
+          </h2>
+          {ready && !searching ? (
+            <p>
+              {hasQuery
+                ? "Try a different word or spelling."
+                : "Press Ctrl+N or the compose button to start writing. Everything saves automatically."}
+            </p>
           ) : null}
         </div>
       ) : (
@@ -486,12 +521,17 @@ export function Workspace({ store, attachments, onController }: WorkspaceProps) 
   }, [controller]);
 
   const selected = state.selected;
-  const visibleNotes = state.notes;
-  const listTitle = state.showArchived
-    ? "Archive"
-    : (state.selectedFolder ?? "All Notes");
+  const searching = state.searchQuery.trim().length > 0;
+  const visibleNotes = searching ? state.searchResults : state.notes;
+  const listTitle = searching
+    ? "Search"
+    : state.showArchived
+      ? "Archive"
+      : (state.selectedFolder ?? "All Notes");
   const selectedFolderPath =
-    state.notes.find((note) => note.id === state.selectedId)?.folder ?? "";
+    state.searchResults.find((note) => note.id === state.selectedId)?.folder ??
+    state.notes.find((note) => note.id === state.selectedId)?.folder ??
+    "";
 
   const [folderEditor, setFolderEditor] = useState<FolderEditorState | null>(
     null,
@@ -549,8 +589,11 @@ export function Workspace({ store, attachments, onController }: WorkspaceProps) 
         notes={visibleNotes}
         selectedId={state.selectedId}
         ready={state.ready}
+        searchQuery={state.searchQuery}
+        searching={state.searching}
         onCreate={() => void controller.createNote()}
         onSelect={(id) => void controller.selectNote(id)}
+        onSearchChange={controller.setSearchQuery}
         onTogglePin={(id) => void controller.togglePin(id)}
         onDuplicate={(id) => void controller.duplicateNote(id)}
         onSetArchived={(id, archived) => void controller.setArchived(id, archived)}
