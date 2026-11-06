@@ -317,6 +317,50 @@ export const makeNoteIndex = (
       return { note: found.note, folder };
     });
 
+  const listTrash = (): Effect.Effect<
+    ReadonlyArray<NoteSummary>,
+    NoteIndexError
+  > =>
+    attempt("listTrash", undefined, async () => {
+      const trashRoot = absolutePath(root, TRASH_DIRECTORY);
+      if ((await storage.stat(trashRoot)) === null) return [];
+      const files = await collectNotes(trashRoot, storage);
+      const notes: NoteSummary[] = [];
+
+      for (const file of files) {
+        const note = await readNote(storage, absolutePath(trashRoot, file.path));
+        if (note === null) continue;
+        notes.push({
+          id: note.id,
+          title: note.title,
+          created: note.created,
+          modified: note.modified,
+          pinned: note.pinned,
+          archived: note.archived,
+          folder: folderOf(file.path),
+        });
+      }
+
+      return notes.sort((left, right) =>
+        left.modified !== right.modified
+          ? left.modified < right.modified
+            ? 1
+            : -1
+          : left.id.localeCompare(right.id),
+      );
+    });
+
+  const purge = (id: string): Effect.Effect<void, NoteIndexError> =>
+    attempt("purge", undefined, async () => {
+      const found = await findTrashedNote(root, storage, id);
+      if (found === null) {
+        throw new Error(`Note not found in Trash: ${id}`);
+      }
+      await storage.remove(
+        absolutePath(root, joinRelative(TRASH_DIRECTORY, found.relativePath)),
+      );
+    });
+
   const search = (
     query: string,
     limit: number = DEFAULT_SEARCH_LIMIT,
@@ -365,7 +409,7 @@ export const makeNoteIndex = (
       await replaceAll(driver, root, storage);
     });
 
-  return { list, get, save, search, trash, restore, rebuild };
+  return { list, get, save, search, trash, restore, listTrash, purge, rebuild };
 };
 
 /**
@@ -609,6 +653,7 @@ const findTrashedNote = async (
   id: string,
 ): Promise<TrashedNote | null> => {
   const trashRoot = absolutePath(root, TRASH_DIRECTORY);
+  if ((await storage.stat(trashRoot)) === null) return null;
   const files = await collectNotes(trashRoot, storage);
 
   for (const file of files) {

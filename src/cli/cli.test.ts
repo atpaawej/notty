@@ -48,6 +48,8 @@ const fakeClient = (overrides: Partial<NottyClient> = {}): NottyClient => ({
   duplicateNote: vi.fn(async () => entry()),
   trashNote: vi.fn(async () => undefined),
   restoreNote: vi.fn(async () => entry()),
+  listTrashNotes: vi.fn(async () => [summary()]),
+  purgeNote: vi.fn(async () => undefined),
   listFolders: vi.fn(async () => ["Life", "Work"]),
   createFolder: vi.fn(async (folder: string) => folder),
   renameFolder: vi.fn(async (_folder: string, next: string) => next),

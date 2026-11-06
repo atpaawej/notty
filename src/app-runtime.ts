@@ -94,6 +94,14 @@ export const noteStore: NoteStore = {
     await withVault((vault) => vault.deleteFolder(folder));
     await folderChanged();
   },
+  listTrash: () => withIndex((index) => index.listTrash()),
+  trashNote: async (id) => {
+    await withIndex((index) => index.trash(id));
+  },
+  restoreNote: (id) => withIndex((index) => index.restore(id)),
+  purgeNote: async (id) => {
+    await withIndex((index) => index.purge(id));
+  },
 };
 
 let vaultRoot = "";

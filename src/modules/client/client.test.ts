@@ -144,11 +144,28 @@ describe("NottyClient notes", () => {
     await expect(client.listNotes({ includeArchived: true })).resolves.toEqual(
       [],
     );
+    await expect(client.listTrashNotes()).resolves.toMatchObject([
+      { id: note.note.id, title: "Temporary", folder: "Work" },
+    ]);
 
     const restored = await client.restoreNote(note.note.id);
     expect(restored.note.title).toBe("Temporary");
     expect(restored.note.body).toBe("recover me");
     expect(restored.folder).toBe("Work");
+    await expect(client.listTrashNotes()).resolves.toEqual([]);
+  });
+
+  it("purges a trashed note permanently", async () => {
+    const note = await client.createNote({
+      title: "Gone",
+      body: "delete me",
+    });
+
+    await client.trashNote(note.note.id);
+    await client.purgeNote(note.note.id);
+
+    await expect(client.listTrashNotes()).resolves.toEqual([]);
+    await expect(client.restoreNote(note.note.id)).rejects.toThrow();
   });
 
   it("searches titles and bodies", async () => {

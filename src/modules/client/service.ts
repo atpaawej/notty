@@ -91,6 +91,10 @@ export interface NottyClient {
   readonly duplicateNote: (id: string) => Promise<NottyNote>;
   readonly trashNote: (id: string) => Promise<void>;
   readonly restoreNote: (id: string) => Promise<NottyNote>;
+  /** Notes currently in the Trash, most recently modified first. */
+  readonly listTrashNotes: () => Promise<ReadonlyArray<NoteSummary>>;
+  /** Permanently delete one trashed note. */
+  readonly purgeNote: (id: string) => Promise<void>;
   readonly listFolders: () => Promise<ReadonlyArray<string>>;
   readonly createFolder: (folder: string) => Promise<string>;
   readonly renameFolder: (
