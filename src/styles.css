@@ -1,34 +1,58 @@
 /*
- * Notty — Apple-clean light theme.
- * 60% surfaces (white / near-white) · 30% structure & text (grays, hairlines)
- * 10% accent (Apple blue, spent on compose, focus rings, active-row tint).
- * Dark theme lands with the theme ticket.
+ * Notty — Apple-clean dark theme.
+ * 60% surfaces (deep charcoal / neutral darks) · 30% structure & text (soft whites, hairlines)
+ * 10% accent (Apple Dark Blue, spent on compose, focus rings, active-row tint).
  */
 
 :root {
   /* 60% — surfaces */
-  --surface-editor: #ffffff;
-  --surface-list: #fbfbfd;
-  --surface-sidebar: #f5f5f7;
+  --surface-editor: #1e1e1e;
+  --surface-list: #252526;
+  --surface-sidebar: #1c1c1e;
 
   /* 30% — structure & text */
-  --text-primary: #1d1d1f;
-  --text-secondary: #6e6e73;
-  --hairline: rgba(0, 0, 0, 0.08);
-  --selection: rgba(0, 0, 0, 0.055);
+  --text-primary: #f5f5f7;
+  --text-secondary: #8e8e93;
+  --hairline: rgba(255, 255, 255, 0.08);
+  --selection: rgba(255, 255, 255, 0.06);
 
-  /* 10% — accent (Apple blue) */
-  --accent: #0071e3;
-  --accent-hover: #0077ed;
-  --accent-pressed: #006edb;
-  --accent-tint: rgba(0, 113, 227, 0.1);
+  /* 10% — accent (Apple dark blue) */
+  --accent: #2997ff;
+  --accent-hover: #3da4ff;
+  --accent-pressed: #1d87e8;
+  --accent-tint: rgba(41, 151, 255, 0.16);
 
   --radius: 8px;
-  color-scheme: light;
+  color-scheme: dark;
 }
 
 * {
   box-sizing: border-box;
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+  scrollbar-width: thin;
+}
+
+::selection {
+  background: rgba(41, 151, 255, 0.35);
+  color: #ffffff;
+}
+
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.28);
 }
 
 html,
@@ -36,6 +60,8 @@ body,
 #root {
   height: 100%;
   margin: 0;
+  background: var(--surface-editor);
+  color-scheme: dark;
 }
 
 body {
@@ -309,6 +335,7 @@ body {
   margin: 0 0 14px;
   background: transparent;
   color: var(--text-primary);
+  caret-color: var(--accent);
   font: inherit;
   font-size: 26px;
   font-weight: 700;
@@ -330,6 +357,8 @@ body {
   outline: none;
   font-size: 14px;
   line-height: 1.65;
+  color: var(--text-primary);
+  caret-color: var(--accent);
 }
 
 .note-editor-content:focus {
@@ -367,6 +396,44 @@ body {
 .note-editor-content ul[data-type="taskList"] {
   list-style: none;
   padding-left: 0;
+}
+
+.note-editor-content blockquote {
+  border-left: 3px solid var(--accent);
+  margin-left: 0;
+  margin-right: 0;
+  padding-left: 14px;
+  color: var(--text-secondary);
+}
+
+.note-editor-content hr {
+  border: 0;
+  border-top: 1px solid var(--hairline);
+  margin: 1.5em 0;
+}
+
+.note-editor-content code {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.9em;
+  background: rgba(255, 255, 255, 0.08);
+  padding: 0.15em 0.35em;
+  border-radius: 4px;
+}
+
+.note-editor-content pre {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.9em;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--hairline);
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  overflow-x: auto;
+}
+
+.note-editor-content pre code {
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
 }
 
 .note-editor-content p.is-editor-empty:first-child::before {
