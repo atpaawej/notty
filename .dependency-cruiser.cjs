@@ -5,7 +5,7 @@
  * Everything else in the module folder is private. These rules make
  * importing past an interface fail CI, not code review.
  */
-const MODULES = ["vault", "note-file", "note-index", "editor", "workspace", "hotkey"];
+const MODULES = ["vault", "note-file", "note-index", "client", "editor", "workspace", "hotkey"];
 
 const boundaryRules = MODULES.map((mod) => ({
   name: `no-cross-module-internals-${mod}`,

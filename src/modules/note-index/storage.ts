@@ -28,5 +28,6 @@ export interface NoteStorage {
   ) => Promise<ReadonlyArray<NoteStorageEntry>>;
   /** `null` when the path does not exist. */
   readonly stat: (path: string) => Promise<NoteStorageStat | null>;
+  readonly rename: (from: string, to: string) => Promise<void>;
   readonly remove: (path: string) => Promise<void>;
 }

@@ -9,6 +9,7 @@ The vault is the user's data. Everything else in Notty is rebuildable.
   notty.db            SQLite index (derived)
   attachments/        images, UUID filenames
   .notty/             internal flags, never user content
+  .trash/             trashed notes, mirroring the folder tree
   <folders...>/
     <note>.md
 ```
@@ -57,6 +58,7 @@ Rules:
 - If the index is missing, stale, or corrupt, startup rebuilds it from the vault.
 - Search and listing read only from the index, never by re-parsing files.
 - Deleting `notty.db` at any time is safe.
+- The app and the CLI may use the index at the same time. SQLite runs in WAL mode with a busy timeout, so short write overlaps wait instead of failing. A stale index is rebuilt in place; the database file is only removed when it is corrupt.
 
 ## Attachments
 
@@ -66,7 +68,8 @@ Rules:
 
 ## Trash
 
-- Deleting a note moves it under Trash rather than unlinking it.
+- Deleting a note moves it under `.trash/` rather than unlinking it.
+- The Trash mirrors the vault folder tree, so restore puts the note back in its original folder without extra metadata.
 - Trashed notes are restorable for 30 days.
 - A startup sweep permanently deletes anything past retention.
 - Retention is a vault concern, not an index concern.

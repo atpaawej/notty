@@ -4,9 +4,14 @@
   "version": "0.1.1",
   "type": "module",
   "license": "MIT",
+  "bin": {
+    "notty": "dist-cli/notty.js"
+  },
   "scripts": {
     "dev": "vite",
-    "build": "npm run typecheck && vite build",
+    "build": "npm run typecheck && npm run build:web && npm run build:cli",
+    "build:web": "vite build",
+    "build:cli": "vite build --config vite.cli.config.ts && chmod +x dist-cli/notty.js",
     "typecheck": "tsc --noEmit",
     "preview": "vite preview",
     "tauri": "tauri",

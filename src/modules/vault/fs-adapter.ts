@@ -8,7 +8,12 @@
  * fails loudly — keep it that way.
  */
 import { Effect, Layer } from "effect";
-import { resolveVaultPaths, Vault, type VaultFileSystem } from "./service";
+import {
+  resolveVaultPaths,
+  Vault,
+  type VaultFileSystem,
+  type VaultPaths,
+} from "./service";
 import { makeVault } from "./vault";
 
 /**
@@ -72,3 +77,13 @@ export const vaultProductionLayer = Layer.succeed(
     nodeVaultFileSystem,
   ),
 );
+
+/**
+ * A Node adapter pinned to explicit paths. Tests and the CLI point it at a
+ * temporary vault; production uses `vaultProductionLayer` and the XDG rule.
+ */
+export const vaultNodeLayer = (paths: VaultPaths): Layer.Layer<Vault> =>
+  Layer.succeed(
+    Vault,
+    makeVault(() => Effect.succeed(paths), nodeVaultFileSystem),
+  );

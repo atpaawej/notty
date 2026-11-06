@@ -22,10 +22,12 @@ import {
   type NoteSummary,
 } from "./service";
 import {
+  CONNECTION_PRAGMAS,
   CREATE_SCHEMA,
   DELETE_ALL_FTS,
   DELETE_ALL_NOTES,
   DELETE_FTS,
+  DELETE_NOTE,
   DROP_SCHEMA,
   GET_NOTE,
   GET_NOTE_PATH,
@@ -39,6 +41,7 @@ import {
   SELECT_FINGERPRINTS,
   TABLE_COUNT,
   UPSERT_NOTE,
+  WAL_PRAGMA,
   ftsQuery,
   fuzzyFtsQuery,
   searchTokens,
@@ -53,6 +56,7 @@ import {
 import type { NoteStorage, NoteStorageStat } from "./storage";
 
 const MARKDOWN_SUFFIX = ".md";
+const TRASH_DIRECTORY = ".trash";
 const DEFAULT_SEARCH_LIMIT = 50;
 const MAX_FUZZY_ALTERNATIVES = 64;
 
@@ -90,36 +94,73 @@ export const openNoteIndex = async (
   let driver: SqlDriver | null = null;
   let current = false;
 
+  const openDriver = async (): Promise<SqlDriver> => {
+    const opened = await options.openDriver();
+    await applyConnectionPragmas(opened);
+    return opened;
+  };
+
   try {
-    driver = await options.openDriver();
-    current =
-      (await isHealthy(driver)) &&
-      (await isCurrent(driver, root, options.storage));
+    driver = await openDriver();
   } catch {
-    // A failed open, query or integrity check means the index is unusable.
-    current = false;
+    // The file cannot be opened at all; recreate it below.
   }
 
-  if (!current) {
-    if (driver !== null) {
-      await driver.close().catch(() => undefined);
+  if (driver !== null) {
+    try {
+      current =
+        (await isIntact(driver)) &&
+        (await isHealthy(driver)) &&
+        (await isCurrent(driver, root, options.storage));
+    } catch {
+      current = false;
     }
+
+    if (!current) {
+      try {
+        // A missing or stale schema is rebuilt in place. Keeping the open
+        // connection means a concurrently starting app is not left holding a
+        // deleted file. A new database is intact but empty, so simultaneous
+        // first runs all create the schema instead of deleting each other's.
+        await resetSchema(driver);
+      } catch {
+        // The database survived opening but cannot hold a schema, so it is
+        // corrupt. Recreate it below.
+        await driver.close().catch(() => undefined);
+        driver = null;
+      }
+    }
+  }
+
+  if (driver === null) {
     if (options.databasePath !== null) {
       await options.storage.remove(options.databasePath).catch(() => undefined);
     }
-    driver = await options.openDriver();
+    driver = await openDriver();
     await resetSchema(driver);
+  }
+
+  if (!current) {
     await replaceAll(driver, root, options.storage);
   }
 
-  const open = driver;
-  if (open === null) {
-    throw new Error("The index driver could not be opened");
-  }
   return {
-    index: makeNoteIndex(open, root, options.storage),
-    close: () => open.close(),
+    index: makeNoteIndex(driver, root, options.storage),
+    close: () => driver.close(),
   };
+};
+
+const applyConnectionPragmas = async (driver: SqlDriver): Promise<void> => {
+  for (const sql of CONNECTION_PRAGMAS) {
+    try {
+      await driver.execute({ sql });
+    } catch (cause) {
+      // Switching to WAL needs a brief exclusive lock. When another process
+      // is opening at the same moment, keep the connection: the busy timeout
+      // serialises writes, and a later open can switch the journal mode.
+      if (sql !== WAL_PRAGMA) throw cause;
+    }
+  }
 };
 
 export const makeNoteIndex = (
@@ -147,7 +188,16 @@ export const makeNoteIndex = (
       const where: string[] = [];
       const params: SqlValue[] = [];
 
-      if (options.includeArchived !== true) where.push("notes.archived = 0");
+      if (options.archived !== undefined) {
+        where.push("notes.archived = ?");
+        params.push(options.archived ? 1 : 0);
+      } else if (options.includeArchived !== true) {
+        where.push("notes.archived = 0");
+      }
+      if (options.pinned !== undefined) {
+        where.push("notes.pinned = ?");
+        params.push(options.pinned ? 1 : 0);
+      }
       if (options.folder !== undefined) {
         where.push("notes.folder = ?");
         params.push(normalizeFolder(options.folder));
@@ -209,6 +259,64 @@ export const makeNoteIndex = (
       return { note, folder: targetFolder };
     });
 
+  const trash = (id: string): Effect.Effect<void, NoteIndexError> =>
+    attempt("trash", undefined, async () => {
+      const rows = await driver.select<{ path: string }>({
+        sql: GET_NOTE_PATH,
+        params: [id],
+      });
+      const existing = rows[0];
+      if (existing === undefined) {
+        throw new Error(`Note not found: ${id}`);
+      }
+
+      const target = await availableTrashPath(root, existing.path, id, storage);
+      await storage.makeDirectory(
+        parentDirectory(absolutePath(root, target)),
+      );
+      await storage.rename(
+        absolutePath(root, existing.path),
+        absolutePath(root, target),
+      );
+
+      // The file is already safe in `.trash`; a failed transaction leaves a
+      // stale row that startup recovery drops.
+      await driver.transaction([
+        { sql: DELETE_NOTE, params: [id] },
+        { sql: DELETE_FTS, params: [id] },
+      ]);
+    });
+
+  const restore = (
+    id: string,
+  ): Effect.Effect<IndexedNote | null, NoteIndexError> =>
+    attempt("restore", undefined, async () => {
+      const found = await findTrashedNote(root, storage, id);
+      if (found === null) return null;
+
+      const folder = folderOf(found.relativePath);
+      const target = await availableRestorePath(
+        root,
+        found.relativePath,
+        id,
+        storage,
+      );
+      await storage.makeDirectory(
+        parentDirectory(absolutePath(root, target)),
+      );
+      await storage.rename(
+        absolutePath(root, joinRelative(TRASH_DIRECTORY, found.relativePath)),
+        absolutePath(root, target),
+      );
+
+      const info = await storage.stat(absolutePath(root, target));
+      if (info === null) {
+        throw new Error(`Restored note file disappeared: ${target}`);
+      }
+      await driver.transaction(noteStatements(found.note, folder, target, info));
+      return { note: found.note, folder };
+    });
+
   const search = (
     query: string,
     limit: number = DEFAULT_SEARCH_LIMIT,
@@ -257,7 +365,7 @@ export const makeNoteIndex = (
       await replaceAll(driver, root, storage);
     });
 
-  return { list, get, save, search, rebuild };
+  return { list, get, save, search, trash, restore, rebuild };
 };
 
 /**
@@ -309,13 +417,17 @@ const resetSchema = async (driver: SqlDriver): Promise<void> => {
   await driver.transaction(statements);
 };
 
-const isHealthy = async (driver: SqlDriver): Promise<boolean> => {
+/** True when SQLite itself reports the database as sound. */
+const isIntact = async (driver: SqlDriver): Promise<boolean> => {
   const integrity = await driver.select<Record<string, unknown>>({
     sql: INTEGRITY_CHECK,
   });
   const verdict = integrity[0] === undefined ? undefined : Object.values(integrity[0])[0];
-  if (verdict !== "ok") return false;
+  return verdict === "ok";
+};
 
+/** True when the schema is present at the current version. */
+const isHealthy = async (driver: SqlDriver): Promise<boolean> => {
   const version = await driver.select<{ user_version: number }>({
     sql: SCHEMA_VERSION_QUERY,
   });
@@ -473,6 +585,86 @@ const folderOf = (path: string): string => {
 const basenameOf = (path: string): string => {
   const slash = path.lastIndexOf("/");
   return slash < 0 ? path : path.slice(slash + 1);
+};
+
+const parentDirectory = (path: string): string => {
+  const slash = path.lastIndexOf("/");
+  if (slash < 0) return path;
+  if (slash === 0) return "/";
+  return path.slice(0, slash);
+};
+
+interface TrashedNote {
+  readonly note: Note;
+  readonly relativePath: string;
+}
+
+/**
+ * The Trash mirrors the vault tree, so a note's path below `.trash` is its
+ * original vault-relative path and restore needs no separate metadata.
+ */
+const findTrashedNote = async (
+  root: string,
+  storage: NoteStorage,
+  id: string,
+): Promise<TrashedNote | null> => {
+  const trashRoot = absolutePath(root, TRASH_DIRECTORY);
+  const files = await collectNotes(trashRoot, storage);
+
+  for (const file of files) {
+    const note = await readNote(storage, absolutePath(trashRoot, file.path));
+    if (note !== null && note.id === id) {
+      return { note, relativePath: file.path };
+    }
+  }
+  return null;
+};
+
+const availableTrashPath = async (
+  root: string,
+  path: string,
+  id: string,
+  storage: NoteStorage,
+): Promise<string> => {
+  const mirror = joinRelative(TRASH_DIRECTORY, path);
+  if ((await storage.stat(absolutePath(root, mirror))) === null) return mirror;
+  return availableFallbackPath(
+    root,
+    joinRelative(TRASH_DIRECTORY, folderOf(path)),
+    id,
+    storage,
+  );
+};
+
+const availableRestorePath = async (
+  root: string,
+  path: string,
+  id: string,
+  storage: NoteStorage,
+): Promise<string> => {
+  if ((await storage.stat(absolutePath(root, path))) === null) return path;
+  return availableFallbackPath(root, folderOf(path), id, storage);
+};
+
+const availableFallbackPath = async (
+  root: string,
+  folder: string,
+  id: string,
+  storage: NoteStorage,
+): Promise<string> => {
+  const stem = safeFileStem(id);
+  for (let suffix = 0; ; suffix += 1) {
+    const name = suffix === 0 ? `${stem}${MARKDOWN_SUFFIX}` : `${stem}-${suffix}${MARKDOWN_SUFFIX}`;
+    const candidate = joinRelative(folder, name);
+    if ((await storage.stat(absolutePath(root, candidate))) === null) {
+      return candidate;
+    }
+  }
+};
+
+const safeFileStem = (id: string): string => {
+  const stem = id.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^\.+/, "");
+  return stem.length === 0 ? "note" : stem;
 };
 
 /**

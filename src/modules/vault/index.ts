@@ -7,6 +7,6 @@
  */
 export { resolveVaultPaths, Vault, VaultError } from "./service";
 export type { Attachment, AttachmentUpload, VaultPaths, VaultShape } from "./service";
-export { vaultProductionLayer } from "./fs-adapter";
+export { vaultProductionLayer, vaultNodeLayer } from "./fs-adapter";
 export { vaultMemoryLayer } from "./memory-adapter";
 export { vaultTauriLayer } from "./tauri-adapter";
