@@ -25,6 +25,7 @@
     "fs:allow-read-text-file",
     "fs:allow-remove",
     "fs:allow-rename",
+    "fs:allow-write-file",
     "fs:allow-write-text-file",
     "sql:default",
     "sql:allow-execute",
