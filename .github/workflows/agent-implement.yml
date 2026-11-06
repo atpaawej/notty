@@ -152,10 +152,11 @@ jobs:
             printf 'Implement GitHub issue #%s in this repository.\n\n' "$N"
             printf 'Repository conventions are in AGENTS.md. Read it, GLOSSARY.md, and docs/ before changing code.\n\n'
             printf 'The issue to implement:\n\n'
-            gh issue view "$N" --json title,body --jq '"## " + .title + "\n\n" + .body'
+            gh issue view "$N" --json title,body,comments --jq '"## " + .title + "\n\n" + .body + (if (.comments | length) > 0 then "\n\n## Discussion and guidance from maintainers:\n\n" + ([.comments[].body] | join("\n\n---\n\n")) else "" end)'
             printf '\n\nRules:\n'
             printf -- '- You are already on the branch for this work. Do not create or switch branches.\n'
             printf -- '- Do NOT push, do NOT open a PR, do NOT touch GitHub in any way.\n'
+            printf -- '- Do NOT modify or create any files in .github/ (especially .github/workflows/). Workflows are maintained on main; GitHub rejects automated pushes that modify workflows.\n'
             printf -- '- Make the smallest change that satisfies the acceptance criteria.\n'
             printf -- '- Run `npm run typecheck`, `npm test`, `npm run depcruise` and `npm run build`; they must all pass.\n'
             printf -- '- Commit your work in small commits with messages like "Part of #%s: ...".\n' "$N"
