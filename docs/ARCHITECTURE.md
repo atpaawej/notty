@@ -1,6 +1,6 @@
 # Architecture
 
-Six deep modules, one public interface each, wired through Effect Layers. Read this before adding a module or reaching into one.
+Seven deep modules, one public interface each, wired through Effect Layers. Read this before adding a module or reaching into one.
 
 ## Design language
 
@@ -20,6 +20,7 @@ src/modules/
   vault/        owns the vault on disk
   note-file/    owns the Markdown + frontmatter format
   note-index/   owns the SQLite index and search
+  client/       owns the Promise surface over a vault
   editor/       owns TipTap, wrapped
   workspace/    owns the three-column UI state
   hotkey/       owns the configurable global shortcut
@@ -45,13 +46,21 @@ This module has no I/O. It is pure and is the primary unit-test target.
 
 ### note-index
 
-Interface: list, get, save, search, rebuild. There is no `remove` yet — the Trash ticket extends this surface.
+Interface: list, get, save, search, trash, restore, rebuild.
 
-Ownership: `note-index` writes note files. `save` serialises with `note-file`, writes the file first, then upserts the index row. `vault` keeps creation, paths, attachments and the Trash sweep; `note-file` stays pure.
+Ownership: `note-index` writes note files. `save` serialises with `note-file`, writes the file first, then upserts the index row. `trash` moves the file under `.trash/` before deleting its row; `restore` reverses that using the path below `.trash/`. `vault` keeps creation, paths, attachments and the Trash sweep; `note-file` stays pure.
 
-Hides: the SQLite schema, the standalone FTS5 table (synced explicitly in the same transaction as `notes`, no triggers), transaction boundaries, mirroring of frontmatter columns, rebuild-on-corruption.
+Hides: the SQLite schema, the standalone FTS5 table (synced explicitly in the same transaction as `notes`, no triggers), transaction boundaries, mirroring of frontmatter columns, WAL and busy-timeout connection settings, rebuild-on-corruption.
 
 Adapters: SQLite against the vault's index file (production), in-memory SQLite (tests). Both run the same SQL through the same driver seam. The rebuild path is exercised by the in-memory adapter.
+
+### client
+
+Interface: one `NottyClient` over a vault — list, search, read, create, append, edit, replace, rename, move, pin, archive, duplicate, trash, restore, folder lifecycle, and `dispose`.
+
+Hides: Effect runtimes and Layers, the order of file and index writes, title derivation, identity and clock seams, and the conversion of typed module errors into one `NottyClientError`.
+
+Adapters: the production client resolves the XDG vault and its `notty.db`; the memory client uses a temporary directory and in-memory SQLite. Tests cross the same interface as the CLI. See `src/cli/` for the terminal adapter over this module.
 
 ### editor
 
@@ -80,6 +89,7 @@ Adapters: the Tauri plugin (production), an in-memory adapter that records regis
 - **Storage seam** — `note-file` × `note-index` × `vault`. Tested with a temporary vault and an in-memory index. If the file and the index disagree, the file wins.
 - **Editor seam** — `editor`'s Markdown in/out. Every supported object must round-trip through parse and serialize.
 - **Hotkey seam** — `hotkey`'s one registered accelerator. The production adapter owns the Tauri global-shortcut plugin; the in-memory adapter records registrations and can model collisions.
+- **Client seam** — `client`'s Promise methods. The CLI and tests use the same interface; the production adapter opens the XDG vault, the memory adapter opens a temporary one.
 - **Product seam** — the running app. Create a note, see it in the list, quit, relaunch, still there.
 
 No module imports another module's internals. If two modules need to share a type, it lives in the module that owns the concept and the other imports it from `index.ts`.

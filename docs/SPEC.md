@@ -54,6 +54,13 @@ When they conflict, capture speed wins. Capture is the reason the app exists; th
 - One vault, auto-created at the XDG data location on first launch. The user is never asked to choose a location and is not expected to open the files.
 - No sync in v1. Local, single machine.
 
+## CLI and agent skill
+
+- A scriptable `notty` CLI exposes the note and folder lifecycle against the same vault as the desktop app.
+- It is installed as `/usr/bin/notty` by the Debian package and works while the app is running.
+- Plain output is scan-friendly; `--json` provides a stable machine-readable shape.
+- A bundled Agent Skill teaches coding agents to find, read, create, edit, and organise notes through the CLI. `notty skill install` installs it.
+
 ## Appearance
 
 - Light, dark, and follow-system themes.
