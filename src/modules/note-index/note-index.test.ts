@@ -242,6 +242,56 @@ for (const adapter of adapters) {
       expect(byBody.map((summary) => summary.id)).toEqual(["body"]);
     });
 
+    it("matches titles and bodies, never paths or filenames", async () => {
+      await withIndex(layer(), (index) =>
+        index.save(
+          makeNote("filename-needle", {
+            title: "Errands",
+            body: "Nothing to see here",
+          }),
+          "Folder Needle",
+        ),
+      );
+
+      await expect(
+        withIndex(layer(), (index) => index.search("needle")),
+      ).resolves.toEqual([]);
+      await expect(
+        withIndex(layer(), (index) => index.search("Errands")),
+      ).resolves.toMatchObject([{ id: "filename-needle" }]);
+    });
+
+    it("finds a near-miss spelling in a title or body", async () => {
+      await withIndex(layer(), (index) =>
+        Effect.gen(function* () {
+          yield* index.save(
+            makeNote("groceries", {
+              title: "Groceries",
+              body: "Milk, eggs, the good bread",
+            }),
+            "",
+          );
+          yield* index.save(
+            makeNote("cafe", {
+              title: "Café",
+              body: "Meet me at the coffee shop",
+            }),
+            "",
+          );
+        }),
+      );
+
+      await expect(
+        withIndex(layer(), (index) => index.search("Groceris")),
+      ).resolves.toMatchObject([{ id: "groceries" }]);
+      await expect(
+        withIndex(layer(), (index) => index.search("breaad")),
+      ).resolves.toMatchObject([{ id: "groceries" }]);
+      await expect(
+        withIndex(layer(), (index) => index.search("cofee")),
+      ).resolves.toMatchObject([{ id: "cafe" }]);
+    });
+
     it("removes diacritics and never throws on FTS syntax", async () => {
       await withIndex(layer(), (index) =>
         index.save(makeNote("cafe", { title: "Café" }), ""),
@@ -373,6 +423,47 @@ for (const adapter of adapters) {
     });
   });
 }
+
+describe("note-index search performance", () => {
+  it("searches thousands of indexed notes without reading their files", async () => {
+    const total = 2000;
+
+    const outcome = await withIndex(
+      noteIndexMemoryLayer(vaultRoot),
+      (index) =>
+        Effect.gen(function* () {
+          for (let number = 0; number < total; number += 1) {
+            yield* index.save(
+              makeNote(`note-${number}`, {
+                title: `Note ${number}`,
+                body:
+                  number === 42
+                    ? "needleword searchable text"
+                    : `searchable text number ${number}`,
+              }),
+              "",
+            );
+          }
+
+          // Search must keep working from the index alone.
+          yield* Effect.promise(() =>
+            unlink(join(vaultRoot, "note-42.md")),
+          );
+
+          const started = performance.now();
+          const fuzzy = yield* index.search("serchable");
+          const elapsed = performance.now() - started;
+          const needle = yield* index.search("needlword");
+
+          return { fuzzy, needle, elapsed };
+        }),
+    );
+
+    expect(outcome.fuzzy).toHaveLength(50);
+    expect(outcome.needle.map((note) => note.id)).toContain("note-42");
+    expect(outcome.elapsed).toBeLessThan(1500);
+  }, 30_000);
+});
 
 describe("note-index file-backed startup recovery", () => {
   const layer = () => noteIndexNodeLayer({ root: vaultRoot });

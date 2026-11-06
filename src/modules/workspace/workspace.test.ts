@@ -53,6 +53,7 @@ const makeStore = (root: string): NoteStore => {
     list: (listOptions) => run((index) => index.list(listOptions)),
     get: (id) => run((index) => index.get(id)),
     save: (note, folder) => run((index) => index.save(note, folder)),
+    search: (query, limit) => run((index) => index.search(query, limit)),
     listFolders: () => listFolderTree(root),
     createFolder: async (folder) => {
       await mkdir(join(root, folder), { recursive: true });
@@ -78,6 +79,19 @@ const clock = (): Date => new Date(tick);
 const nextId = (): string => `note-${(counter += 1)}`;
 const advance = (milliseconds: number): void => {
   tick += milliseconds;
+};
+
+const waitFor = async (
+  predicate: () => boolean,
+  timeoutMs = 2000,
+): Promise<void> => {
+  const started = Date.now();
+  while (!predicate()) {
+    if (Date.now() - started > timeoutMs) {
+      throw new Error("Timed out waiting for a condition");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
 };
 
 const options = (overrides: Partial<WorkspaceOptions> = {}): WorkspaceOptions => ({
@@ -556,6 +570,52 @@ describe("folders", () => {
     const reopened = createWorkspace(makeStore(vaultRoot), options());
     await reopened.ready;
     expect(reopened.getState().notes.map((note) => note.id)).toEqual([kept]);
+  });
+});
+
+describe("search", () => {
+  it("debounces typing, then opens a matching note in the editor", async () => {
+    const store = makeStore(vaultRoot);
+    const search = vi.fn(store.search);
+    const workspace = createWorkspace(
+      { ...store, search },
+      options({ searchDebounceMs: 60 }),
+    );
+    await workspace.ready;
+
+    await workspace.createNote();
+    workspace.setBody("Groceries and milk");
+    await workspace.flush();
+    const groceries = workspace.getState().selectedId as string;
+
+    advance(60_000);
+    await workspace.createNote();
+    workspace.setBody("An unrelated second note");
+    await workspace.flush();
+
+    workspace.setSearchQuery("groc");
+    expect(workspace.getState().searchQuery).toBe("groc");
+    expect(workspace.getState().searching).toBe(true);
+    expect(workspace.getState().searchResults).toEqual([]);
+    expect(search).not.toHaveBeenCalled();
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(search).not.toHaveBeenCalled();
+
+    await waitFor(() => !workspace.getState().searching);
+    expect(search).toHaveBeenCalledWith("groc");
+    expect(workspace.getState().searchResults.map((note) => note.id)).toEqual([
+      groceries,
+    ]);
+
+    await workspace.selectNote(groceries);
+    expect(workspace.getState().selected?.body).toBe("Groceries and milk");
+
+    workspace.setSearchQuery("");
+    expect(workspace.getState().searchQuery).toBe("");
+    expect(workspace.getState().searchResults).toEqual([]);
+    expect(workspace.getState().searching).toBe(false);
+    await workspace.flush();
   });
 });
 

@@ -56,6 +56,7 @@ export const noteStore: NoteStore = {
   list: (options) => withIndex((index) => index.list(options)),
   get: (id) => withIndex((index) => index.get(id)),
   save: (note, folder) => withIndex((index) => index.save(note, folder)),
+  search: (query, limit) => withIndex((index) => index.search(query, limit)),
   listFolders: () =>
     withVault((vault) =>
       Effect.gen(function* () {

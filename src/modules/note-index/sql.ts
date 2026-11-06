@@ -6,7 +6,7 @@
  */
 import type { IndexedNote, NoteSummary } from "./service";
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export const CREATE_SCHEMA: ReadonlyArray<string> = [
   `CREATE TABLE IF NOT EXISTS notes (
@@ -29,10 +29,12 @@ export const CREATE_SCHEMA: ReadonlyArray<string> = [
     body,
     tokenize = 'unicode61 remove_diacritics 2'
   )`,
+  `CREATE VIRTUAL TABLE IF NOT EXISTS notes_vocab USING fts5vocab(notes_fts, 'row')`,
   `PRAGMA user_version = ${SCHEMA_VERSION}`,
 ];
 
 export const DROP_SCHEMA: ReadonlyArray<string> = [
+  "DROP TABLE IF EXISTS notes_vocab",
   "DROP TABLE IF EXISTS notes_fts",
   "DROP TABLE IF EXISTS notes",
 ];
@@ -84,10 +86,17 @@ LIMIT ?`;
 export const SELECT_FINGERPRINTS =
   "SELECT path, source_mtime, source_size FROM notes";
 
+/**
+ * The index's vocabulary, used to widen a search to near-miss spellings. Only
+ * terms of a plausible length are read; edit distance decides the rest.
+ */
+export const SEARCH_VOCABULARY =
+  "SELECT term, doc FROM notes_vocab WHERE length(term) BETWEEN ? AND ?";
+
 export const INTEGRITY_CHECK = "PRAGMA quick_check";
 export const SCHEMA_VERSION_QUERY = "PRAGMA user_version";
 export const TABLE_COUNT =
-  "SELECT count(*) AS total FROM sqlite_master WHERE name IN ('notes', 'notes_fts')";
+  "SELECT count(*) AS total FROM sqlite_master WHERE name IN ('notes', 'notes_fts', 'notes_vocab')";
 
 export interface NoteRow {
   readonly id: string;
@@ -144,7 +153,22 @@ export const toIndexedNote = (row: NoteRow): IndexedNote => ({
   folder: row.folder,
 });
 
+export interface VocabularyRow {
+  readonly term: string;
+  readonly doc: number;
+}
+
 const TOKEN = /[\p{L}\p{N}\p{M}_]+/gu;
+
+/** Fold the way FTS5's `unicode61` tokenizer does for Latin text. */
+const normalizeToken = (token: string): string =>
+  token.normalize("NFD").replace(/\p{M}+/gu, "").toLowerCase();
+
+/** The searchable words in the user's query, in source order. */
+export const searchTokens = (input: string): ReadonlyArray<string> =>
+  (input.match(TOKEN) ?? [])
+    .map(normalizeToken)
+    .filter((token) => token.length > 0);
 
 /**
  * Turn free text into a safe FTS5 phrase query. Quoting means user input can
@@ -152,7 +176,78 @@ const TOKEN = /[\p{L}\p{N}\p{M}_]+/gu;
  * token so search-as-you-type finds partial words.
  */
 export const ftsQuery = (input: string): string | null => {
-  const tokens = input.match(TOKEN);
-  if (tokens === null || tokens.length === 0) return null;
+  const tokens = searchTokens(input);
+  if (tokens.length === 0) return null;
   return `"${tokens.join(" ")}"*`;
+};
+
+const quote = (token: string): string => `"${token.replace(/"/g, '""')}"`;
+
+/**
+ * An FTS5 query that accepts any of the supplied alternatives for each word.
+ * Every word must still match, so widening a typo never drops the rest of the
+ * query.
+ */
+export const fuzzyFtsQuery = (
+  tokens: ReadonlyArray<string>,
+  alternatives: ReadonlyArray<ReadonlyArray<string>>,
+): string | null => {
+  if (tokens.length === 0) return null;
+
+  const groups = tokens.map((token, index) => {
+    const unique = Array.from(new Set([token, ...(alternatives[index] ?? [])]));
+    return unique.length === 1
+      ? quote(token)
+      : `(${unique.map(quote).join(" OR ")})`;
+  });
+  return groups.join(" AND ");
+};
+
+/**
+ * True when `left` is within `max` edits of `right`, using optimal string
+ * alignment so a swapped pair counts as one edit.
+ */
+export const withinEditDistance = (
+  left: string,
+  right: string,
+  max: number,
+): boolean => {
+  if (left === right) return true;
+  if (max < 0 || Math.abs(left.length - right.length) > max) return false;
+  if (left.length === 0) return right.length <= max;
+  if (right.length === 0) return left.length <= max;
+
+  let beforePrevious: number[] = new Array(right.length + 1).fill(0);
+  let previous: number[] = Array.from(
+    { length: right.length + 1 },
+    (_, index) => index,
+  );
+
+  for (let row = 1; row <= left.length; row += 1) {
+    const current: number[] = [row];
+    let rowMinimum = row;
+    for (let column = 1; column <= right.length; column += 1) {
+      const substitution = left[row - 1] === right[column - 1] ? 0 : 1;
+      let value = Math.min(
+        previous[column] + 1,
+        current[column - 1] + 1,
+        previous[column - 1] + substitution,
+      );
+      if (
+        row > 1 &&
+        column > 1 &&
+        left[row - 1] === right[column - 2] &&
+        left[row - 2] === right[column - 1]
+      ) {
+        value = Math.min(value, beforePrevious[column - 2] + 1);
+      }
+      current[column] = value;
+      if (value < rowMinimum) rowMinimum = value;
+    }
+    if (rowMinimum > max) return false;
+    beforePrevious = previous;
+    previous = current;
+  }
+
+  return previous[right.length] <= max;
 };

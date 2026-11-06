@@ -35,20 +35,26 @@ import {
   SCHEMA_VERSION,
   SCHEMA_VERSION_QUERY,
   SEARCH_NOTES,
+  SEARCH_VOCABULARY,
   SELECT_FINGERPRINTS,
   TABLE_COUNT,
   UPSERT_NOTE,
   ftsQuery,
+  fuzzyFtsQuery,
+  searchTokens,
   toIndexedNote,
   toSummary,
+  withinEditDistance,
   type FingerprintRow,
   type NoteRow,
   type SummaryRow,
+  type VocabularyRow,
 } from "./sql";
 import type { NoteStorage, NoteStorageStat } from "./storage";
 
 const MARKDOWN_SUFFIX = ".md";
 const DEFAULT_SEARCH_LIMIT = 50;
+const MAX_FUZZY_ALTERNATIVES = 64;
 
 export interface OpenNoteIndexOptions {
   /** Absolute vault root. Note files live beneath it. */
@@ -214,11 +220,35 @@ export const makeNoteIndex = (
         Number.isFinite(limit) && limit > 0
           ? Math.trunc(limit)
           : DEFAULT_SEARCH_LIMIT;
-      const rows = await driver.select<SummaryRow>({
+      const exact = await driver.select<SummaryRow>({
         sql: SEARCH_NOTES,
         params: [match, size],
       });
-      return rows.map(toSummary);
+      if (exact.length >= size) return exact.map(toSummary);
+
+      // Only pay for the vocabulary scan when the literal query did not fill
+      // the result list. Exact matches always stay ahead of fuzzy ones.
+      const tokens = searchTokens(query);
+      const alternatives = await fuzzyAlternatives(driver, tokens);
+      if (!alternatives.some((terms) => terms.length > 0)) {
+        return exact.map(toSummary);
+      }
+      const widened = fuzzyFtsQuery(tokens, alternatives);
+      if (widened === null) return exact.map(toSummary);
+
+      const fuzzy = await driver.select<SummaryRow>({
+        sql: SEARCH_NOTES,
+        params: [widened, size],
+      });
+      const seen = new Set(exact.map((row) => row.id));
+      const merged = [...exact];
+      for (const row of fuzzy) {
+        if (seen.has(row.id)) continue;
+        seen.add(row.id);
+        merged.push(row);
+        if (merged.length >= size) break;
+      }
+      return merged.map(toSummary);
     });
 
   const rebuild = (): Effect.Effect<void, NoteIndexError> =>
@@ -228,6 +258,47 @@ export const makeNoteIndex = (
     });
 
   return { list, get, save, search, rebuild };
+};
+
+/**
+ * Widen each token to near-miss terms already in the index. Short tokens are
+ * left alone: a one-edit radius around a three-letter word matches too much to
+ * be useful, and the prefix query already covers typing-in-progress.
+ */
+const fuzzyAlternatives = async (
+  driver: SqlDriver,
+  tokens: ReadonlyArray<string>,
+): Promise<ReadonlyArray<ReadonlyArray<string>>> => {
+  const alternatives: string[][] = [];
+
+  for (const token of tokens) {
+    if (token.length < 4) {
+      alternatives.push([]);
+      continue;
+    }
+
+    const radius = token.length >= 8 ? 2 : 1;
+    const rows = await driver.select<VocabularyRow>({
+      sql: SEARCH_VOCABULARY,
+      params: [token.length - radius, token.length + radius],
+    });
+    const matches = rows
+      .filter(
+        (row) =>
+          row.term !== token &&
+          withinEditDistance(token, row.term, radius),
+      )
+      .sort(
+        (left, right) =>
+          Number(right.doc) - Number(left.doc) ||
+          left.term.localeCompare(right.term),
+      )
+      .slice(0, MAX_FUZZY_ALTERNATIVES)
+      .map((row) => row.term);
+    alternatives.push(matches);
+  }
+
+  return alternatives;
 };
 
 const resetSchema = async (driver: SqlDriver): Promise<void> => {
@@ -251,7 +322,7 @@ const isHealthy = async (driver: SqlDriver): Promise<boolean> => {
   if (Number(version[0]?.user_version) !== SCHEMA_VERSION) return false;
 
   const tables = await driver.select<{ total: number }>({ sql: TABLE_COUNT });
-  return Number(tables[0]?.total) === 2;
+  return Number(tables[0]?.total) === 3;
 };
 
 /**
