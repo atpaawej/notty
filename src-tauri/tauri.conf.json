@@ -3,6 +3,7 @@
   "productName": "Notty",
   "version": "0.2.0",
   "identifier": "com.notty.app",
+  "mainBinaryName": "notty-desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
