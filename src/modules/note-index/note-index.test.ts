@@ -524,16 +524,74 @@ for (const adapter of adapters) {
       expect(outcome.listed).toEqual([]);
     });
 
-    it("ignores the echo of Notty's own save via the stat fingerprint", async () => {
+    it("reports a removal when another process already deleted the row", async () => {
+      await writeNoteFile("cli-gone.md", makeNote("cli-gone"));
+
       const outcome = await withIndex(layer(), (index) =>
         Effect.gen(function* () {
-          yield* index.save(makeNote("echo"), "");
-          const result = yield* index.syncFile("echo.md");
+          yield* index.syncFile("cli-gone.md");
+          // Model the CLI: it moves the file to Trash and drops the row from
+          // the shared index before the desktop watcher sees the removal.
+          yield* index.trash("cli-gone");
+          return yield* index.syncFile("cli-gone.md");
+        }),
+      );
+
+      expect(outcome).toEqual({
+        status: "removed",
+        id: null,
+        path: "cli-gone.md",
+      });
+    });
+
+    it("ignores the echo of Notty's own save via the stat fingerprint", async () => {
+      const note = makeNote("echo", { title: "Echo title", body: "Echo body" });
+
+      const outcome = await withIndex(layer(), (index) =>
+        Effect.gen(function* () {
+          yield* index.save(note, "Journal");
+          const result = yield* index.syncFile("Journal/echo.md");
           return result;
         }),
       );
 
-      expect(outcome.status).toBe("unchanged");
+      // No SQL ran, but the matching note still comes back so callers can
+      // reconcile an in-memory list that never saw the row.
+      expect(outcome).toMatchObject({
+        status: "unchanged",
+        path: "Journal/echo.md",
+        note: { folder: "Journal", note: { id: "echo", body: "Echo body" } },
+      });
+    });
+
+    it("reports the indexed note when the CLI already wrote the fingerprint", async () => {
+      const note = makeNote("cli-note", {
+        title: "Written by the CLI",
+        modified: "2026-11-05T12:00:00Z",
+      });
+
+      const outcome = await withIndex(layer(), (index) =>
+        Effect.gen(function* () {
+          // Model the CLI: write the file and commit its fingerprint to the
+          // same index before the desktop watcher reports the change.
+          yield* Effect.promise(() => writeNoteFile("cli-note.md", note));
+          yield* index.syncFile("cli-note.md");
+          return yield* index.syncFile("cli-note.md");
+        }),
+      );
+
+      expect(outcome).toMatchObject({
+        status: "unchanged",
+        path: "cli-note.md",
+        note: {
+          folder: "",
+          note: {
+            id: "cli-note",
+            title: "Written by the CLI",
+            modified: "2026-11-05T12:00:00Z",
+          },
+        },
+      });
     });
 
     it("accepts raw Markdown without frontmatter and gives it a stable id", async () => {

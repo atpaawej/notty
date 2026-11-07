@@ -27,14 +27,26 @@ export interface IndexedNote {
 }
 
 /**
- * What one incremental file reconcile did. `unchanged` is the echo-suppression
- * path: the file's stat fingerprint still matches the index row, so no SQL and
- * no render are needed.
+ * What one incremental file reconcile did.
+ *
+ * `unchanged` is the echo-suppression path: the file's stat fingerprint equals
+ * the index row, so no SQL ran. It still carries the indexed note, because the
+ * row may have been written by another process (the CLI shares the index) and
+ * the caller's in-memory list may not know about it yet.
  */
 export type FileSyncResult =
   | { readonly status: "ignored" }
-  | { readonly status: "unchanged" }
-  | { readonly status: "removed"; readonly id: string; readonly path: string }
+  | {
+      readonly status: "unchanged";
+      readonly note: IndexedNote;
+      readonly path: string;
+    }
+  | {
+      readonly status: "removed";
+      /** The indexed id, or `null` when no row existed for the path. */
+      readonly id: string | null;
+      readonly path: string;
+    }
   | {
       readonly status: "upserted";
       readonly note: IndexedNote;

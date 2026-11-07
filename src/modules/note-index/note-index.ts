@@ -430,7 +430,12 @@ export const makeNoteIndex = (
 
       const info = await storage.stat(absolute);
       if (info === null) {
-        if (existing === undefined) return { status: "unchanged" } as const;
+        if (existing === undefined) {
+          // The CLI removed the file and its row before the watcher fired.
+          // The id is unknown, but the caller still needs to know a note file
+          // disappeared so it can reconcile its own list.
+          return { status: "removed", id: null, path } as const;
+        }
         await driver.transaction([
           { sql: DELETE_NOTE, params: [existing.id] },
           { sql: DELETE_FTS, params: [existing.id] },
@@ -446,13 +451,27 @@ export const makeNoteIndex = (
           })
         )[0];
         // Notty's own auto-save wrote this file: the row already carries the
-        // stat of that exact write, so the watcher event is an echo.
+        // stat of that exact write, so no SQL is needed. The note still goes
+        // back to the caller: another process (the CLI) may have written both
+        // the file and the row, and the caller's in-memory list can be stale
+        // or missing the note entirely.
         if (
           fingerprint !== undefined &&
           Number(fingerprint.source_mtime) === Math.trunc(info.mtime) &&
           Number(fingerprint.source_size) === info.size
         ) {
-          return { status: "unchanged" } as const;
+          const rows = await driver.select<NoteRow>({
+            sql: GET_NOTE,
+            params: [existing.id],
+          });
+          const row = rows[0];
+          if (row !== undefined) {
+            return {
+              status: "unchanged",
+              note: toIndexedNote(row),
+              path,
+            } as const;
+          }
         }
       }
 
