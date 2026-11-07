@@ -9,6 +9,7 @@
  */
 export { NoteIndex, NoteIndexError } from "./service";
 export type {
+  FileSyncResult,
   IndexedNote,
   ListOptions,
   NoteIndexShape,

@@ -26,6 +26,21 @@ export interface IndexedNote {
   readonly folder: string;
 }
 
+/**
+ * What one incremental file reconcile did. `unchanged` is the echo-suppression
+ * path: the file's stat fingerprint still matches the index row, so no SQL and
+ * no render are needed.
+ */
+export type FileSyncResult =
+  | { readonly status: "ignored" }
+  | { readonly status: "unchanged" }
+  | { readonly status: "removed"; readonly id: string; readonly path: string }
+  | {
+      readonly status: "upserted";
+      readonly note: IndexedNote;
+      readonly path: string;
+    };
+
 export interface ListOptions {
   /** Exact vault-relative folder match. Omit for every folder. */
   readonly folder?: string;
@@ -67,6 +82,14 @@ export interface NoteIndexShape {
   >;
   /** Permanently delete one trashed note. */
   readonly purge: (id: string) => Effect.Effect<void, NoteIndexError>;
+  /**
+   * Reconcile one vault-relative Markdown file after an external change:
+   * upsert it from a single read, or drop it when it no longer exists. The
+   * stat fingerprint suppresses the echo of Notty's own auto-save.
+   */
+  readonly syncFile: (
+    relativePath: string,
+  ) => Effect.Effect<FileSyncResult, NoteIndexError>;
   readonly rebuild: () => Effect.Effect<void, NoteIndexError>;
 }
 

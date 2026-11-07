@@ -742,6 +742,10 @@ body {
   background: transparent;
   color: var(--text-primary);
   transition: background-color 120ms ease;
+  /* WebKitGTK skips layout and paint for rows outside the viewport. The
+     intrinsic size keeps the scrollbar stable while they are skipped. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 64px;
 }
 
 .note-list-item-main {

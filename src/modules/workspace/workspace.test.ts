@@ -1,14 +1,25 @@
-import { access, mkdir, mkdtemp, readdir, rename, rm } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  readdir,
+  rename,
+  rm,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { Effect } from "effect";
+import { Effect, ManagedRuntime } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { serialize, type Note } from "../note-file";
 import {
   NoteIndex,
   noteIndexMemoryLayer,
   type NoteIndexError,
   type NoteIndexShape,
 } from "../note-index";
+import { createMemoryVaultWatcher } from "../vault";
 import {
   createWorkspace,
   type NoteStore,
@@ -38,50 +49,81 @@ const listFolderTree = async (root: string): Promise<ReadonlyArray<string>> => {
   return folders.sort((left, right) => left.localeCompare(right));
 };
 
-const makeStore = (root: string): NoteStore => {
-  const run = <A>(
-    action: (index: NoteIndexShape) => Effect.Effect<A, NoteIndexError>,
-  ): Promise<A> =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const index = yield* NoteIndex;
-        return yield* action(index);
-      }).pipe(Effect.provide(noteIndexMemoryLayer(root))),
-    );
+type Run = <A>(
+  action: (index: NoteIndexShape) => Effect.Effect<A, NoteIndexError>,
+) => Promise<A>;
 
-  return {
-    list: (listOptions) => run((index) => index.list(listOptions)),
-    get: (id) => run((index) => index.get(id)),
-    save: (note, folder) => run((index) => index.save(note, folder)),
-    search: (query, limit) => run((index) => index.search(query, limit)),
-    listFolders: () => listFolderTree(root),
-    createFolder: async (folder) => {
-      await mkdir(join(root, folder), { recursive: true });
-    },
-    renameFolder: async (folder, nextFolder) => {
-      const target = join(root, nextFolder);
-      await mkdir(dirname(target), { recursive: true });
-      await rename(join(root, folder), target);
-      await run((index) => index.rebuild());
-    },
-    deleteFolder: async (folder) => {
-      await rm(join(root, folder), { recursive: true, force: true });
-      await run((index) => index.rebuild());
-    },
-    listTrash: () => run((index) => index.listTrash()),
-    trashNote: async (id) => {
-      await run((index) => index.trash(id));
-    },
-    restoreNote: (id) => run((index) => index.restore(id)),
-    purgeNote: async (id) => {
-      await run((index) => index.purge(id));
-    },
-  };
+const runAction = <A>(
+  action: (index: NoteIndexShape) => Effect.Effect<A, NoteIndexError>,
+): Effect.Effect<A, NoteIndexError, NoteIndex> =>
+  Effect.gen(function* () {
+    const index = yield* NoteIndex;
+    return yield* action(index);
+  });
+
+/** Build the workspace's `NoteStore` over whichever index `run` owns. */
+const makeStoreWith = (root: string, run: Run): NoteStore => ({
+  list: (listOptions) => run((index) => index.list(listOptions)),
+  get: (id) => run((index) => index.get(id)),
+  save: (note, folder) => run((index) => index.save(note, folder)),
+  syncFile: (relativePath) => run((index) => index.syncFile(relativePath)),
+  search: (query, limit) => run((index) => index.search(query, limit)),
+  listFolders: () => listFolderTree(root),
+  createFolder: async (folder) => {
+    await mkdir(join(root, folder), { recursive: true });
+  },
+  renameFolder: async (folder, nextFolder) => {
+    const target = join(root, nextFolder);
+    await mkdir(dirname(target), { recursive: true });
+    await rename(join(root, folder), target);
+    await run((index) => index.rebuild());
+  },
+  deleteFolder: async (folder) => {
+    await rm(join(root, folder), { recursive: true, force: true });
+    await run((index) => index.rebuild());
+  },
+  listTrash: () => run((index) => index.listTrash()),
+  trashNote: async (id) => {
+    await run((index) => index.trash(id));
+  },
+  restoreNote: (id) => run((index) => index.restore(id)),
+  purgeNote: async (id) => {
+    await run((index) => index.purge(id));
+  },
+});
+
+/** A store whose index opens, rebuilds and closes for each call. */
+const makeStore = (root: string): NoteStore =>
+  makeStoreWith(root, (action) =>
+    Effect.runPromise(
+      runAction(action).pipe(Effect.provide(noteIndexMemoryLayer(root))),
+    ),
+  );
+
+/**
+ * A store with one long-lived index for the whole test. External file
+ * changes only reach `syncFile` when the same index survives across calls,
+ * which is what the running app does.
+ */
+const makeLiveStore = (root: string): NoteStore => {
+  const runtime = ManagedRuntime.make(noteIndexMemoryLayer(root));
+  liveRuntimes.push(runtime);
+  return makeStoreWith(root, (action) => runtime.runPromise(runAction(action)));
 };
+
+/** A live index plus an in-memory watcher bound to the temporary vault. */
+const makeWatchedStore = (
+  root: string,
+  watcher: ReturnType<typeof createMemoryVaultWatcher>,
+): NoteStore => ({
+  ...makeLiveStore(root),
+  watchVault: (onChange) => watcher.watch(root, onChange),
+});
 
 let vaultRoot: string;
 let tick: number;
 let counter: number;
+const liveRuntimes: Array<{ dispose: () => Promise<void> }> = [];
 
 const clock = (): Date => new Date(tick);
 const nextId = (): string => `note-${(counter += 1)}`;
@@ -102,6 +144,10 @@ const waitFor = async (
   }
 };
 
+/** Yield the event loop so queued watcher work can start. */
+const settle = (): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, 10));
+
 const options = (overrides: Partial<WorkspaceOptions> = {}): WorkspaceOptions => ({
   now: clock,
   newId: nextId,
@@ -117,6 +163,8 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.useRealTimers();
+  await Promise.all(liveRuntimes.map((runtime) => runtime.dispose()));
+  liveRuntimes.length = 0;
   await rm(vaultRoot, {
     recursive: true,
     force: true,
@@ -335,8 +383,7 @@ describe("selection", () => {
     expect(workspace.getState().selected?.body).toBe("First body");
   });
 
-  it("flushes the previous note before switching away", async () => {
-    vi.useFakeTimers();
+  it("queues the previous note's save when switching away", async () => {
     const store = makeStore(vaultRoot);
     const workspace = createWorkspace(store, options());
     await workspace.ready;
@@ -346,8 +393,53 @@ describe("selection", () => {
     advance(60_000);
     await workspace.createNote();
     await workspace.selectNote("note-1");
+    await workspace.flush();
 
     expect((await store.get("note-1"))?.note.body).toBe("Unsaved when switching");
+  });
+
+  it("opens the next note without waiting for the previous note's save", async () => {
+    const first: Note = {
+      id: "first",
+      title: "First",
+      created: "2026-11-05T09:00:00.000Z",
+      modified: "2026-11-05T09:00:00.000Z",
+      pinned: false,
+      archived: false,
+      body: "First body",
+    };
+    const second: Note = {
+      ...first,
+      id: "second",
+      title: "Second",
+      body: "Second body",
+    };
+    await writeFile(join(vaultRoot, "first.md"), serialize(first));
+    await writeFile(join(vaultRoot, "second.md"), serialize(second));
+
+    let releaseSave: () => void = () => undefined;
+    const saveGate = new Promise<void>((resolve) => {
+      releaseSave = resolve;
+    });
+    const base = makeStore(vaultRoot);
+    const store: NoteStore = {
+      ...base,
+      save: async (note, folder) => {
+        await saveGate;
+        return base.save(note, folder);
+      },
+    };
+    const workspace = createWorkspace(store, options());
+    await workspace.ready;
+
+    await workspace.selectNote("second");
+    workspace.setBody("Second body, edited");
+    await workspace.selectNote("first");
+
+    expect(workspace.getState().selected?.body).toBe("First body");
+
+    releaseSave();
+    await workspace.flush();
   });
 });
 
@@ -716,6 +808,176 @@ describe("search", () => {
     expect(workspace.getState().searchResults).toEqual([]);
     expect(workspace.getState().searching).toBe(false);
     await workspace.flush();
+  });
+});
+
+const externalNote = (id: string, title: string, body: string): Note => ({
+  id,
+  title,
+  created: "2026-11-05T10:00:00.000Z",
+  modified: "2026-11-05T10:00:00.000Z",
+  pinned: false,
+  archived: false,
+  body,
+});
+
+describe("realtime vault changes", () => {
+  it("shows a note created outside Notty", async () => {
+    const watcher = createMemoryVaultWatcher();
+    const workspace = createWorkspace(
+      makeWatchedStore(vaultRoot, watcher),
+      options(),
+    );
+    await workspace.ready;
+    await settle();
+
+    await writeFile(
+      join(vaultRoot, "groceries.md"),
+      serialize(externalNote("groceries", "Groceries", "Milk, eggs")),
+    );
+    watcher.emit({ kind: "create", path: "groceries.md" });
+
+    await waitFor(() =>
+      workspace.getState().notes.some((note) => note.id === "groceries"),
+    );
+    expect(workspace.getState().notes[0]?.title).toBe("Groceries");
+    workspace.dispose();
+  });
+
+  it("reloads the open note when an external tool changes it", async () => {
+    const watcher = createMemoryVaultWatcher();
+    const store = makeWatchedStore(vaultRoot, watcher);
+    const workspace = createWorkspace(store, options());
+    await workspace.ready;
+    await workspace.createNote();
+    workspace.setBody("Local body");
+    await workspace.flush();
+    const id = workspace.getState().selectedId as string;
+
+    const saved = await store.get(id);
+    await writeFile(
+      join(vaultRoot, `${id}.md`),
+      serialize({ ...(saved as NonNullable<typeof saved>).note, body: "A much longer external body" }),
+    );
+    watcher.emit({ kind: "update", path: `${id}.md` });
+
+    await waitFor(
+      () => workspace.getState().selected?.body === "A much longer external body",
+    );
+    workspace.dispose();
+  });
+
+  it("keeps unsaved keystrokes when the open file changes on disk", async () => {
+    const watcher = createMemoryVaultWatcher();
+    const store = makeWatchedStore(vaultRoot, watcher);
+    const workspace = createWorkspace(store, options());
+    await workspace.ready;
+    await workspace.createNote();
+    workspace.setBody("Saved body");
+    await workspace.flush();
+    const id = workspace.getState().selectedId as string;
+
+    workspace.setBody("Unsaved local edit");
+
+    const saved = await store.get(id);
+    await writeFile(
+      join(vaultRoot, `${id}.md`),
+      serialize({ ...(saved as NonNullable<typeof saved>).note, body: "External body" }),
+    );
+    watcher.emit({ kind: "update", path: `${id}.md` });
+    await settle();
+
+    expect(workspace.getState().selected?.body).toBe("Unsaved local edit");
+
+    await workspace.flush();
+    expect((await store.get(id))?.note.body).toBe("Unsaved local edit");
+    workspace.dispose();
+  });
+
+  it("closes the open note when its file disappears", async () => {
+    const watcher = createMemoryVaultWatcher();
+    const workspace = createWorkspace(
+      makeWatchedStore(vaultRoot, watcher),
+      options(),
+    );
+    await workspace.ready;
+    await workspace.createNote();
+    workspace.setBody("Delete me");
+    await workspace.flush();
+    const id = workspace.getState().selectedId as string;
+
+    await unlink(join(vaultRoot, `${id}.md`));
+    watcher.emit({ kind: "remove", path: `${id}.md` });
+
+    await waitFor(() => workspace.getState().selectedId === null);
+    expect(workspace.getState().selected).toBeNull();
+    expect(workspace.getState().notes).toEqual([]);
+    workspace.dispose();
+  });
+
+  it("reflects a note moved into a new folder outside Notty", async () => {
+    const watcher = createMemoryVaultWatcher();
+    const workspace = createWorkspace(
+      makeWatchedStore(vaultRoot, watcher),
+      options(),
+    );
+    await workspace.ready;
+    await workspace.createNote();
+    workspace.setBody("Move me");
+    await workspace.flush();
+    const id = workspace.getState().selectedId as string;
+
+    await mkdir(join(vaultRoot, "Work"), { recursive: true });
+    await rename(
+      join(vaultRoot, `${id}.md`),
+      join(vaultRoot, "Work", `${id}.md`),
+    );
+    watcher.emit({ kind: "create", path: "Work", isDirectory: true });
+    watcher.emit({ kind: "remove", path: `${id}.md` });
+    watcher.emit({ kind: "create", path: `Work/${id}.md` });
+
+    await waitFor(() =>
+      workspace
+        .getState()
+        .notes.some((note) => note.id === id && note.folder === "Work"),
+    );
+    expect(workspace.getState().folders).toContain("Work");
+    workspace.dispose();
+  });
+
+  it("does not render for the watcher echo of its own save", async () => {
+    const watcher = createMemoryVaultWatcher();
+    const workspace = createWorkspace(
+      makeWatchedStore(vaultRoot, watcher),
+      options(),
+    );
+    await workspace.ready;
+    await workspace.createNote();
+    workspace.setBody("Saved body");
+    await workspace.flush();
+    const id = workspace.getState().selectedId as string;
+
+    let echoRenders = 0;
+    workspace.subscribe(() => {
+      const state = workspace.getState();
+      if (!state.notes.some((note) => note.id === "sentinel")) echoRenders += 1;
+    });
+
+    watcher.emit({ kind: "update", path: `${id}.md` });
+
+    // A second, real change is queued behind the echo. Waiting for it proves
+    // the chain finished with the echo before the render count is read.
+    await writeFile(
+      join(vaultRoot, "sentinel.md"),
+      serialize(externalNote("sentinel", "Sentinel", "Done")),
+    );
+    watcher.emit({ kind: "create", path: "sentinel.md" });
+
+    await waitFor(() =>
+      workspace.getState().notes.some((note) => note.id === "sentinel"),
+    );
+    expect(echoRenders).toBe(0);
+    workspace.dispose();
   });
 });
 

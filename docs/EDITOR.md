@@ -21,15 +21,19 @@ Anything that cannot survive a Markdown round-trip cannot ship in v1. See ADR-00
 The module exports a `NoteEditor` component that:
 
 - takes a Markdown body and a note id,
-- emits Markdown on change (the caller debounces the save),
+- emits Markdown after a short serialization debounce or on blur, not on every keystroke,
+- reports whether keystrokes are still waiting to be serialized (`onDirtyChange`) so the caller can protect an in-flight draft from an external write,
 - accepts pasted and dropped images, handing the bytes to the vault's attachments directory and inserting a relative path.
 
 No ProseMirror editor instance escapes the module. No caller may read editor internals to render the note list or a preview.
+
+One TipTap instance stays mounted for the life of the workspace. Changing `noteId` swaps the document, resets history and keeps the WebKitGTK instantiation cost out of note switching. A later `body` value replaces the document only when the buffer is clean; dirty keystrokes always win, and a clean swap clamps the existing selection to the new document size.
 
 ## Serialization
 
 - Markdown in, Markdown out. The module owns both directions.
 - Parse and serialize are pure and tested independently of React.
+- `getMarkdown()` runs once after 300 ms of quiet typing (`SERIALIZE_DELAY_MS`) or immediately on blur, so a keystroke never pays the serialization cost.
 - Round-trip is the core obligation: parse(serialize(note)) and serialize(parse(markdown)) must be stable for every supported node type.
 - Empty documents serialize to an empty body, not a placeholder paragraph.
 
@@ -46,8 +50,8 @@ No ProseMirror editor instance escapes the module. No caller may read editor int
 
 ## Auto-save interaction
 
-The editor emits Markdown continuously. Debouncing and persistence belong to the workspace module, not the editor. The editor must not know about disk, SQLite, or save state.
+The editor serializes after its own 300 ms quiet period and on blur, then hands the Markdown to the workspace. Persistence debouncing, disk, SQLite and save state stay outside the editor. The workspace treats `onDirtyChange(true)` as ownership: an external change to the open file never replaces a dirty buffer.
 
 ## Undo and redo
 
-Per-note editor history only, provided by the editor library. Notting app-wide. Switching notes resets history.
+Per-note editor history only, provided by the editor library. Never app-wide. Switching notes resets history in place: TipTap 3.32 has no `clearHistory` command, so `resetEditorHistory` rebuilds `EditorState` with the same document and plugins while keeping the mounted view.

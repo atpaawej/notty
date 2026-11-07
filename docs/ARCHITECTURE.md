@@ -31,9 +31,11 @@ Each folder exposes only `index.ts`. Anything else in the folder is private.
 
 ### vault
 
-Interface: resolve the vault location, ensure it exists, store attachments, list/create/rename/delete folders, sweep expired Trash on startup, and guard the one-time welcome-note seed.
+Interface: resolve the vault location, ensure it exists, store attachments, list/create/rename/delete folders, sweep expired Trash on startup, guard the one-time welcome-note seed, and watch the vault for external changes.
 
-Hides: XDG path resolution, directory creation, folder path validation, the `.notty/` metadata folder, Trash retention, first-run seeding flags.
+Hides: XDG path resolution, directory creation, folder path validation, the `.notty/` metadata folder, Trash retention, first-run seeding flags, the OS watch, path filtering, and event debouncing.
+
+Adapters: the Tauri filesystem watch (production) and an in-memory watcher that emits filtered events synchronously (tests and non-Tauri runtimes).
 
 Dependency category: local-substitutable. Tests run against a temporary directory, never the real home directory.
 
@@ -47,11 +49,11 @@ This module has no I/O. It is pure and is the primary unit-test target.
 
 ### note-index
 
-Interface: list, get, save, search, trash, restore, rebuild.
+Interface: list, get, save, search, syncFile, trash, restore, rebuild.
 
-Ownership: `note-index` writes note files. `save` serialises with `note-file`, writes the file first, then upserts the index row. `trash` moves the file under `.trash/` before deleting its row; `restore` reverses that using the path below `.trash/`. `vault` keeps creation, paths, attachments and the Trash sweep; `note-file` stays pure.
+Ownership: `note-index` writes note files. `save` serialises with `note-file`, writes the file first, then upserts the index row. `syncFile` reconciles one externally changed path from a single read and reports `ignored`, `unchanged`, `removed` or `upserted`. `trash` moves the file under `.trash/` before deleting its row; `restore` reverses that using the path below `.trash/`. `vault` keeps creation, paths, attachments and the Trash sweep; `note-file` stays pure.
 
-Hides: the SQLite schema, the standalone FTS5 table (synced explicitly in the same transaction as `notes`, no triggers), transaction boundaries, mirroring of frontmatter columns, WAL and busy-timeout connection settings, rebuild-on-corruption.
+Hides: the SQLite schema, the standalone FTS5 table (synced explicitly in the same transaction as `notes`, no triggers), transaction boundaries, mirroring of frontmatter columns, stat fingerprints that suppress the echo of Notty's own save, path-derived ids for raw Markdown, WAL and busy-timeout connection settings, rebuild-on-corruption.
 
 Adapters: SQLite against the vault's index file (production), in-memory SQLite (tests). Both run the same SQL through the same driver seam. The rebuild path is exercised by the in-memory adapter.
 
@@ -75,7 +77,7 @@ TipTap types must never appear outside this folder. See `docs/EDITOR.md`.
 
 Interface: the three-column shell — selected folder, selected note, and the commands that change them, including folder create/rename/delete, moving a note, pinning, archiving and duplicating.
 
-Hides: sidebar and note-list rendering, folder-tree indentation, keyboard shortcuts, optimistic updates, auto-save scheduling.
+Hides: sidebar and note-list rendering, folder-tree indentation, keyboard shortcuts, optimistic updates, auto-save scheduling, realtime reconciliation of external vault events, and protection of a dirty editor buffer from an external overwrite.
 
 ### hotkey
 
@@ -96,6 +98,7 @@ Adapters: the Tauri shell (production) and an in-memory adapter that models user
 ## Seams
 
 - **Storage seam** — `note-file` × `note-index` × `vault`. Tested with a temporary vault and an in-memory index. If the file and the index disagree, the file wins.
+- **Vault-watch seam** — `vault`'s `VaultWatcher`. Production watches the OS through Tauri and debounces bursts; the in-memory adapter emits the same filtered events synchronously for tests. `note-index` reconciles one path, `workspace` applies the result to the list and the open editor.
 - **Editor seam** — `editor`'s Markdown in/out. Every supported object must round-trip through parse and serialize.
 - **Hotkey seam** — `hotkey`'s one registered accelerator. The production adapter owns the Tauri global-shortcut plugin; the in-memory adapter records registrations and can model collisions.
 - **Updater seam** — `updater`'s GitHub check, staged download and restart. The Tauri adapter talks to the shell; the memory adapter models every state without I/O.

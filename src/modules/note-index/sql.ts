@@ -71,6 +71,11 @@ export const GET_NOTE = `SELECT notes.* FROM notes WHERE notes.id = ?`;
 
 export const GET_NOTE_PATH = "SELECT path FROM notes WHERE id = ?";
 
+export const GET_NOTE_ID_BY_PATH = "SELECT id FROM notes WHERE path = ?";
+
+export const GET_FINGERPRINT_BY_PATH =
+  "SELECT path, source_mtime, source_size FROM notes WHERE path = ?";
+
 export const UPSERT_NOTE = `INSERT INTO notes (
   id, title, created, modified, pinned, archived, title_locked, folder, path, body,
   source_mtime, source_size
