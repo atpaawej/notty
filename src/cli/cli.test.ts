@@ -7,6 +7,7 @@ import type { NoteSummary } from "../modules/note-index";
 import { CliUsageError, parseArgv } from "./args";
 import { runCli, type CliHooks } from "./run";
 import { installSkill } from "./skill";
+import { updateNotty } from "./update";
 
 const summary = (overrides: Partial<NoteSummary> = {}): NoteSummary => ({
   id: "note-1",
@@ -161,6 +162,15 @@ describe("parseArgv", () => {
     });
   });
 
+  it("parses update with --check and --json", () => {
+    expect(parseArgv(["update"])).toEqual({ kind: "update", json: false });
+    expect(parseArgv(["update", "--check", "--json"])).toEqual({
+      kind: "update",
+      json: true,
+      checkOnly: true,
+    });
+  });
+
   it("rejects unknown options and missing ids", () => {
     expect(() => parseArgv(["list", "--nope"])).toThrow(CliUsageError);
     expect(() => parseArgv(["read"])).toThrow(/note id is required/i);
@@ -177,6 +187,7 @@ describe("runCli output", () => {
     expect(help.out.join("")).toContain(
       "Desktop app: run 'notty-desktop' or launch Notty from your applications menu.",
     );
+    expect(help.out.join("")).toContain("notty update [--check] [--json]");
   });
 
   it("prints tab-separated summaries by default and JSON on request", async () => {
@@ -304,6 +315,156 @@ describe("runCli skills", () => {
       method: "file",
       path: "/home/test/.agents/skills/notty/SKILL.md",
     });
+  });
+});
+
+describe("runCli update", () => {
+  it("does not open the vault", async () => {
+    const openClient = vi.fn(async () => fakeClient());
+    const command = hooks(fakeClient(), {
+      openClient,
+      updateApp: async () => ({
+        current: "0.2.7",
+        latest: "0.2.7",
+        updated: false,
+      }),
+    });
+
+    expect(await runCli(["update"], command)).toBe(0);
+    expect(openClient).not.toHaveBeenCalled();
+  });
+
+  it("reports when Notty is already up to date", async () => {
+    const upToDate = hooks(fakeClient(), {
+      updateApp: async () => ({
+        current: "0.2.7",
+        latest: "0.2.7",
+        updated: false,
+      }),
+    });
+
+    expect(await runCli(["update"], upToDate)).toBe(0);
+    expect(upToDate.out.join("")).toBe(
+      "Notty is already up to date (v0.2.7).\n",
+    );
+    expect(upToDate.err).toEqual([]);
+  });
+
+  it("reports an installed update", async () => {
+    const updated = hooks(fakeClient(), {
+      updateApp: async () => ({
+        current: "0.2.6",
+        latest: "0.2.7",
+        updated: true,
+      }),
+    });
+
+    expect(await runCli(["update"], updated)).toBe(0);
+    expect(updated.out.join("")).toBe(
+      "Updating Notty from v0.2.6 to v0.2.7...\n" +
+        "Updated Notty to v0.2.7!\n",
+    );
+  });
+
+  it("prints structured status with --json", async () => {
+    const structured = hooks(fakeClient(), {
+      updateApp: async () => ({
+        current: "0.2.6",
+        latest: "0.2.7",
+        updated: true,
+      }),
+    });
+
+    expect(await runCli(["update", "--json"], structured)).toBe(0);
+    expect(JSON.parse(structured.out.join(""))).toEqual({
+      current: "0.2.6",
+      latest: "0.2.7",
+      updated: true,
+    });
+  });
+
+  it("passes --check through and reports availability", async () => {
+    const calls: Array<{ readonly checkOnly?: boolean }> = [];
+    const check = hooks(fakeClient(), {
+      updateApp: async (options) => {
+        calls.push(options);
+        return { current: "0.2.6", latest: "0.2.7", updated: false };
+      },
+    });
+
+    expect(await runCli(["update", "--check"], check)).toBe(0);
+    expect(calls).toEqual([{ checkOnly: true }]);
+    expect(check.out.join("")).toBe(
+      "Notty v0.2.7 is available (current v0.2.6).\n",
+    );
+  });
+
+  it("exits 1 with a helpful message when the network fails", async () => {
+    const offline = hooks(fakeClient(), {
+      updateApp: async () => {
+        throw new Error("Could not check for updates (offline)");
+      },
+    });
+
+    expect(await runCli(["update"], offline)).toBe(1);
+    expect(offline.err.join("")).toBe(
+      "notty: Could not check for updates (offline)\n",
+    );
+    expect(offline.out).toEqual([]);
+  });
+});
+
+describe("updateNotty", () => {
+  it("does not install when the running version is current", async () => {
+    const installRelease = vi.fn(async () => undefined);
+
+    await expect(
+      updateNotty({
+        currentVersion: "0.2.7",
+        fetchRelease: async () => ({ version: "v0.2.7", downloadUrl: null }),
+        installRelease,
+      }),
+    ).resolves.toEqual({ current: "0.2.7", latest: "0.2.7", updated: false });
+    expect(installRelease).not.toHaveBeenCalled();
+  });
+
+  it("installs a newer release unless --check is set", async () => {
+    const installRelease = vi.fn(async () => undefined);
+    const fetchRelease = async () => ({
+      version: "0.2.7",
+      downloadUrl: "https://example.test/notty.tar.gz",
+    });
+
+    await expect(
+      updateNotty({
+        currentVersion: "0.2.6",
+        checkOnly: true,
+        fetchRelease,
+        installRelease,
+      }),
+    ).resolves.toEqual({ current: "0.2.6", latest: "0.2.7", updated: false });
+    expect(installRelease).not.toHaveBeenCalled();
+
+    await expect(
+      updateNotty({ currentVersion: "0.2.6", fetchRelease, installRelease }),
+    ).resolves.toEqual({ current: "0.2.6", latest: "0.2.7", updated: true });
+    expect(installRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it("never downgrades to an older release", async () => {
+    const installRelease = vi.fn(async () => undefined);
+
+    await expect(
+      updateNotty({
+        currentVersion: "0.2.8",
+        fetchRelease: async () => ({
+          version: "0.2.7",
+          downloadUrl: "https://example.test/notty.tar.gz",
+        }),
+        installRelease,
+      }),
+    ).resolves.toEqual({ current: "0.2.8", latest: "0.2.7", updated: false });
+    expect(installRelease).not.toHaveBeenCalled();
   });
 });
 

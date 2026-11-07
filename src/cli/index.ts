@@ -10,4 +10,16 @@ export { runCli } from "./run";
 export type { CliHooks } from "./run";
 export { installSkill, SKILL_TEXT, SKILL_REPOSITORY } from "./skill";
 export type { SkillInstallResult } from "./skill";
+export {
+  GITHUB_LATEST_RELEASE_URL,
+  UPDATE_REPOSITORY,
+  fetchLatestRelease,
+  installLatestRelease,
+  updateNotty,
+} from "./update";
+export type {
+  LatestRelease,
+  UpdateOptions,
+  UpdateResult,
+} from "./update";
 export { json, noteJson, noteMarkdown, summaryJson, summaryLine } from "./format";

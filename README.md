@@ -45,6 +45,8 @@ notty create --title "Idea" --body "A thought"
 notty append <id> "One more line"
 notty folder create Work
 notty skill install              # install the bundled agent skill
+notty update                     # update the user-space install from GitHub
+notty update --check --json      # report availability without installing
 ```
 
 Pass `--json` for machine-readable output. `notty --help` lists every command.
