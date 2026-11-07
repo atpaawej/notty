@@ -10,3 +10,21 @@ export type { Attachment, AttachmentUpload, VaultPaths, VaultShape } from "./ser
 export { vaultProductionLayer, vaultNodeLayer } from "./fs-adapter";
 export { vaultMemoryLayer } from "./memory-adapter";
 export { vaultTauriLayer } from "./tauri-adapter";
+export {
+  isWatchedVaultPath,
+  mergeVaultChange,
+  vaultRelativePath,
+  WATCH_DEBOUNCE_MS,
+} from "./watch";
+export type {
+  VaultChangeEvent,
+  VaultChangeKind,
+  VaultChangeListener,
+  VaultWatcher,
+} from "./watch";
+export { watchVault, vaultChangeFromWatch } from "./tauri-watcher";
+export { createMemoryVaultWatcher } from "./memory-watcher";
+export type {
+  MemoryVaultWatcher,
+  MemoryVaultWatcherOptions,
+} from "./memory-watcher";
