@@ -324,29 +324,37 @@ export function NoteEditor({
   editorRef.current = editor;
 
   // A different note reuses the mounted editor. `emitUpdate: false` keeps the
-  // content swap out of the auto-save path; the history reset keeps Ctrl+Z
-  // from reaching into the previous note.
+  // content swap out of the auto-save path; `contentType: "markdown"` keeps
+  // TipTap's Markdown parser in the path instead of treating the body as HTML.
+  // The history reset keeps Ctrl+Z from reaching into the previous note.
   useEffect(() => {
     if (previousNoteId.current === noteId) return;
     previousNoteId.current = noteId;
     if (editor === null) return;
 
     const markdown = bodyRef.current;
-    editor.commands.setContent(markdown, { emitUpdate: false });
+    editor.commands.setContent(markdown, {
+      emitUpdate: false,
+      contentType: "markdown",
+    });
     resetEditorHistory(editor);
     lastAppliedBody.current = markdown;
     markDirty(false);
   }, [editor, noteId]);
 
   // External edits to the open note arrive as a new body. A clean buffer
-  // reloads while keeping the cursor anchor; a dirty buffer is left untouched.
+  // reloads as parsed Markdown while keeping the cursor anchor; a dirty buffer
+  // is left untouched.
   useEffect(() => {
     if (editor === null) return;
     if (body === lastAppliedBody.current) return;
     if (dirtyRef.current) return;
 
     const { from, to } = editor.state.selection;
-    editor.commands.setContent(body, { emitUpdate: false });
+    editor.commands.setContent(body, {
+      emitUpdate: false,
+      contentType: "markdown",
+    });
     lastAppliedBody.current = body;
 
     const limit = editor.state.doc.content.size;
