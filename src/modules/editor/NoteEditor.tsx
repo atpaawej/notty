@@ -28,15 +28,27 @@ import {
   type SaveImage,
   type StoredImage,
 } from "./image-intake";
+import { resetEditorHistory } from "./history";
 import { createTransientImageExtension } from "./transient-images";
 
+/** Serialization waits this long after the last keystroke. */
+export const SERIALIZE_DELAY_MS = 300;
+
 export interface NoteEditorProps {
-  /** Identity of the note. Changing it rebuilds the editor and its history. */
+  /** Identity of the note. Changing it swaps content and resets history. */
   readonly noteId: string;
-  /** Markdown body to open the editor with. Later values are ignored. */
+  /**
+   * Markdown body to show. A later value replaces the document only when the
+   * buffer is clean; keystrokes in flight always win.
+   */
   readonly body: string;
-  /** Fires with the full Markdown body on every document change. */
+  /**
+   * Fires with the full Markdown body after the serialization debounce or on
+   * blur. It is deliberately not called on every keystroke.
+   */
   readonly onChange: (markdown: string) => void;
+  /** True while the document has keystrokes not yet passed to `onChange`. */
+  readonly onDirtyChange?: (dirty: boolean) => void;
   /**
    * Stores pasted or dropped image bytes. Omit it to leave image intake off;
    * the editor never decides where attachments live.
@@ -142,6 +154,7 @@ export function NoteEditor({
   noteId,
   body,
   onChange,
+  onDirtyChange,
   saveImage,
   readClipboardImage,
   resolveImageSrc,
@@ -149,6 +162,8 @@ export function NoteEditor({
 }: NoteEditorProps) {
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
+  const onDirtyChangeRef = useRef(onDirtyChange);
+  onDirtyChangeRef.current = onDirtyChange;
   const saveImageRef = useRef(saveImage);
   saveImageRef.current = saveImage;
   const readClipboardImageRef = useRef(readClipboardImage);
@@ -157,6 +172,39 @@ export function NoteEditor({
   resolveImageSrcRef.current = resolveImageSrc;
   const editorRef = useRef<Editor | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+
+  const bodyRef = useRef(body);
+  bodyRef.current = body;
+  /** The Markdown the mounted document currently represents. */
+  const lastAppliedBody = useRef(body);
+  const previousNoteId = useRef(noteId);
+  const dirtyRef = useRef(false);
+  const serializeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const markDirty = (dirty: boolean): void => {
+    if (dirtyRef.current === dirty) return;
+    dirtyRef.current = dirty;
+    onDirtyChangeRef.current?.(dirty);
+  };
+
+  /**
+   * Serialize once, after typing has settled. This is the only place
+   * `getMarkdown()` runs, so keystrokes never pay the Markdown cost.
+   */
+  const flushSerialization = (): void => {
+    if (serializeTimer.current !== null) {
+      clearTimeout(serializeTimer.current);
+      serializeTimer.current = null;
+    }
+    if (!dirtyRef.current) return;
+    const current = editorRef.current;
+    if (current === null) return;
+
+    const markdown = current.getMarkdown();
+    lastAppliedBody.current = markdown;
+    markDirty(false);
+    onChangeRef.current(markdown);
+  };
 
   const insertStored = (stored: ReadonlyArray<StoredImage>): void => {
     if (stored.length === 0) return;
@@ -223,9 +271,10 @@ export function NoteEditor({
     return true;
   };
 
-  // `noteId` is the only dependency: a different note means a fresh editor,
-  // which is exactly the per-note undo history the product promises. The
-  // resolver reads a ref so a URL source becoming available never rebuilds it.
+  // One mounted editor for the life of the workspace. Switching notes swaps
+  // content and resets history; it never pays WebKitGTK's instantiation cost.
+  // The resolver reads a ref so a URL source becoming available never rebuilds
+  // the instance.
   const editor = useEditor(
     {
       extensions: [
@@ -256,13 +305,67 @@ export function NoteEditor({
           return true;
         },
       },
-      onUpdate: ({ editor: current }) => {
-        onChangeRef.current(current.getMarkdown());
+      onUpdate: () => {
+        markDirty(true);
+        if (serializeTimer.current !== null) {
+          clearTimeout(serializeTimer.current);
+        }
+        serializeTimer.current = setTimeout(() => {
+          serializeTimer.current = null;
+          flushSerialization();
+        }, SERIALIZE_DELAY_MS);
       },
+      // Clicking the note list blurs the editor first, so the last keystrokes
+      // are serialized before the workspace switches notes.
+      onBlur: () => flushSerialization(),
     },
-    [noteId],
+    [],
   );
   editorRef.current = editor;
+
+  // A different note reuses the mounted editor. `emitUpdate: false` keeps the
+  // content swap out of the auto-save path; the history reset keeps Ctrl+Z
+  // from reaching into the previous note.
+  useEffect(() => {
+    if (previousNoteId.current === noteId) return;
+    previousNoteId.current = noteId;
+    if (editor === null) return;
+
+    const markdown = bodyRef.current;
+    editor.commands.setContent(markdown, { emitUpdate: false });
+    resetEditorHistory(editor);
+    lastAppliedBody.current = markdown;
+    markDirty(false);
+  }, [editor, noteId]);
+
+  // External edits to the open note arrive as a new body. A clean buffer
+  // reloads while keeping the cursor anchor; a dirty buffer is left untouched.
+  useEffect(() => {
+    if (editor === null) return;
+    if (body === lastAppliedBody.current) return;
+    if (dirtyRef.current) return;
+
+    const { from, to } = editor.state.selection;
+    editor.commands.setContent(body, { emitUpdate: false });
+    lastAppliedBody.current = body;
+
+    const limit = editor.state.doc.content.size;
+    editor.commands.setTextSelection({
+      from: Math.min(from, limit),
+      to: Math.min(to, limit),
+    });
+  }, [body, editor]);
+
+  useEffect(
+    () => () => {
+      if (serializeTimer.current !== null) {
+        clearTimeout(serializeTimer.current);
+        serializeTimer.current = null;
+      }
+      flushSerialization();
+    },
+    [],
+  );
 
   const active = useEditorState({
     editor,

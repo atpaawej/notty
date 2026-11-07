@@ -5,6 +5,8 @@
  * controller. There is deliberately no save button and no save indicator.
  */
 import {
+  memo,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -420,6 +422,109 @@ const formatModified = (modified: string): string => {
   });
 };
 
+interface NoteListItemProps {
+  readonly note: NoteSummary;
+  readonly isActive: boolean;
+  readonly isTrash: boolean;
+  readonly showFolder: boolean;
+  readonly onSelect: (id: string) => void;
+  readonly onTogglePin: (id: string) => void;
+  readonly onDuplicate: (id: string) => void;
+  readonly onSetArchived: (id: string, archived: boolean) => void;
+  readonly onMove: (id: string) => void;
+  readonly onTrash: (id: string) => void;
+  readonly onRestore: (id: string) => void;
+  readonly onPurge: (id: string) => void;
+}
+
+/**
+ * One note row. Memoised because a keystroke or another note's save may
+ * rebuild the surrounding list; rows whose summary object did not change are
+ * skipped. CSS `content-visibility` handles the off-screen ones.
+ */
+const NoteListItem = memo(function NoteListItem({
+  note,
+  isActive,
+  isTrash,
+  showFolder,
+  onSelect,
+  onTogglePin,
+  onDuplicate,
+  onSetArchived,
+  onMove,
+  onTrash,
+  onRestore,
+  onPurge,
+}: NoteListItemProps) {
+  return (
+    <div
+      role="listitem"
+      className={`note-list-item${isActive ? " is-active" : ""}${isTrash ? " is-trash" : ""}`}
+    >
+      <button
+        className="note-list-item-main"
+        type="button"
+        onClick={() => onSelect(note.id)}
+      >
+        <span className="note-list-item-title">{note.title || "New Note"}</span>
+        <span className="note-list-item-meta">
+          <time className="note-list-item-date" dateTime={note.modified}>
+            {formatModified(note.modified)}
+          </time>
+          {showFolder && note.folder.length > 0 ? (
+            <span className="note-folder-chip">{note.folder}</span>
+          ) : null}
+        </span>
+      </button>
+      {isTrash ? (
+        <div className="trash-item-actions">
+          <button
+            className="trash-action"
+            type="button"
+            onClick={() => onRestore(note.id)}
+          >
+            Restore
+          </button>
+          <button
+            className="trash-action is-danger"
+            type="button"
+            onClick={() => onPurge(note.id)}
+          >
+            Delete Permanently
+          </button>
+        </div>
+      ) : (
+        <ActionMenu
+          label={note.title || "New Note"}
+          actions={[
+            {
+              label: note.pinned ? "Unpin" : "Pin",
+              onSelect: () => onTogglePin(note.id),
+            },
+            {
+              label: "Duplicate",
+              onSelect: () => onDuplicate(note.id),
+            },
+            {
+              label: note.archived ? "Unarchive" : "Archive",
+              onSelect: () => onSetArchived(note.id, !note.archived),
+            },
+            {
+              label: "Move to Folder…",
+              onSelect: () => onMove(note.id),
+            },
+            {
+              label: "Move to Trash",
+              danger: true,
+              onSelect: () => onTrash(note.id),
+            },
+          ]}
+        />
+      )}
+    </div>
+  );
+});
+
 function NoteList({
   title,
   view,
@@ -540,74 +645,21 @@ function NoteList({
       ) : (
         <div className="note-list-items" role="list">
           {notes.map((note) => (
-            <div
+            <NoteListItem
               key={note.id}
-              role="listitem"
-              className={`note-list-item${note.id === selectedId ? " is-active" : ""}${isTrash ? " is-trash" : ""}`}
-            >
-              <button
-                className="note-list-item-main"
-                type="button"
-                onClick={() => onSelect(note.id)}
-              >
-                <span className="note-list-item-title">
-                  {note.title || "New Note"}
-                </span>
-                <span className="note-list-item-meta">
-                  <time className="note-list-item-date" dateTime={note.modified}>
-                    {formatModified(note.modified)}
-                  </time>
-                  {showFolder && note.folder.length > 0 ? (
-                    <span className="note-folder-chip">{note.folder}</span>
-                  ) : null}
-                </span>
-              </button>
-              {isTrash ? (
-                <div className="trash-item-actions">
-                  <button
-                    className="trash-action"
-                    type="button"
-                    onClick={() => onRestore(note.id)}
-                  >
-                    Restore
-                  </button>
-                  <button
-                    className="trash-action is-danger"
-                    type="button"
-                    onClick={() => onPurge(note.id)}
-                  >
-                    Delete Permanently
-                  </button>
-                </div>
-              ) : (
-                <ActionMenu
-                  label={note.title || "New Note"}
-                  actions={[
-                    {
-                      label: note.pinned ? "Unpin" : "Pin",
-                      onSelect: () => onTogglePin(note.id),
-                    },
-                    {
-                      label: "Duplicate",
-                      onSelect: () => onDuplicate(note.id),
-                    },
-                    {
-                      label: note.archived ? "Unarchive" : "Archive",
-                      onSelect: () => onSetArchived(note.id, !note.archived),
-                    },
-                    {
-                      label: "Move to Folder…",
-                      onSelect: () => onMove(note.id),
-                    },
-                    {
-                      label: "Move to Trash",
-                      danger: true,
-                      onSelect: () => onTrash(note.id),
-                    },
-                  ]}
-                />
-              )}
-            </div>
+              note={note}
+              isActive={note.id === selectedId}
+              isTrash={isTrash}
+              showFolder={showFolder}
+              onSelect={onSelect}
+              onTogglePin={onTogglePin}
+              onDuplicate={onDuplicate}
+              onSetArchived={onSetArchived}
+              onMove={onMove}
+              onTrash={onTrash}
+              onRestore={onRestore}
+              onPurge={onPurge}
+            />
           ))}
         </div>
       )}
@@ -909,6 +961,50 @@ export function Workspace({ store, attachments, onController, onOpenSettings, ho
     if (confirmed) void controller.emptyTrash();
   };
 
+  // Stable row callbacks keep `NoteListItem`'s memo compare shallow-usable.
+  const selectNote = useCallback(
+    (id: string) => {
+      void controller.selectNote(id);
+    },
+    [controller],
+  );
+  const togglePin = useCallback(
+    (id: string) => {
+      void controller.togglePin(id);
+    },
+    [controller],
+  );
+  const duplicateNote = useCallback(
+    (id: string) => {
+      void controller.duplicateNote(id);
+    },
+    [controller],
+  );
+  const setArchived = useCallback(
+    (id: string, archived: boolean) => {
+      void controller.setArchived(id, archived);
+    },
+    [controller],
+  );
+  const trashNote = useCallback(
+    (id: string) => {
+      void controller.trashNote(id);
+    },
+    [controller],
+  );
+  const restoreNote = useCallback(
+    (id: string) => {
+      void controller.restoreNote(id);
+    },
+    [controller],
+  );
+  const purgeNote = useCallback(
+    (id: string) => {
+      void controller.purgeNote(id);
+    },
+    [controller],
+  );
+
   return (
     <div className="shell">
       <Sidebar
@@ -942,15 +1038,15 @@ export function Workspace({ store, attachments, onController, onOpenSettings, ho
         searching={state.searching}
         showFolder={showFolderBadge}
         onCreate={() => void controller.createNote()}
-        onSelect={(id) => void controller.selectNote(id)}
+        onSelect={selectNote}
         onSearchChange={controller.setSearchQuery}
-        onTogglePin={(id) => void controller.togglePin(id)}
-        onDuplicate={(id) => void controller.duplicateNote(id)}
-        onSetArchived={(id, archived) => void controller.setArchived(id, archived)}
+        onTogglePin={togglePin}
+        onDuplicate={duplicateNote}
+        onSetArchived={setArchived}
         onMove={setMoveTargetId}
-        onTrash={(id) => void controller.trashNote(id)}
-        onRestore={(id) => void controller.restoreNote(id)}
-        onPurge={(id) => void controller.purgeNote(id)}
+        onTrash={trashNote}
+        onRestore={restoreNote}
+        onPurge={purgeNote}
         onEmptyTrash={emptyTrash}
       />
       {selected === null ? (
@@ -1002,10 +1098,10 @@ export function Workspace({ store, attachments, onController, onOpenSettings, ho
               />
             </div>
             <NoteEditor
-              key={selected.id}
               noteId={selected.id}
               body={selected.body}
               onChange={controller.setBody}
+              onDirtyChange={controller.setEditing}
               saveImage={attachments?.saveImage}
               readClipboardImage={attachments?.readClipboardImage}
               resolveImageSrc={attachments?.imageSrc}
