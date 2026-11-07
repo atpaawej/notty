@@ -21,6 +21,7 @@ import {
   summaryLines,
 } from "./format";
 import { installSkill, SKILL_TEXT, type SkillInstallResult } from "./skill";
+import { updateNotty, type UpdateResult } from "./update";
 
 export interface CliHooks {
   readonly openClient: () => Promise<NottyClient>;
@@ -29,6 +30,9 @@ export interface CliHooks {
   readonly version: string;
   readonly skillText?: string;
   readonly installSkill?: () => Promise<SkillInstallResult>;
+  readonly updateApp?: (options: {
+    readonly checkOnly?: boolean;
+  }) => Promise<UpdateResult>;
 }
 
 const withFolder = (entry: NottyNote): NoteSummary => ({
@@ -236,6 +240,48 @@ const runSkillCommand = async (
   }
 };
 
+const runUpdateCommand = async (
+  command: Extract<CliCommand, { readonly kind: "update" }>,
+  hooks: CliHooks,
+): Promise<void> => {
+  const update =
+    hooks.updateApp ??
+    ((options: { readonly checkOnly?: boolean }) =>
+      updateNotty({ currentVersion: hooks.version, ...options }));
+
+  const result = await update(
+    command.checkOnly === true ? { checkOnly: true } : {},
+  );
+
+  if (command.json) {
+    hooks.stdout(
+      toJson({
+        current: result.current,
+        latest: result.latest,
+        updated: result.updated,
+      }),
+    );
+    return;
+  }
+
+  if (result.updated) {
+    hooks.stdout(
+      `Updating Notty from v${result.current} to v${result.latest}...\n` +
+        `Updated Notty to v${result.latest}!\n`,
+    );
+    return;
+  }
+
+  if (result.latest === result.current) {
+    hooks.stdout(`Notty is already up to date (v${result.current}).\n`);
+    return;
+  }
+
+  hooks.stdout(
+    `Notty v${result.latest} is available (current v${result.current}).\n`,
+  );
+};
+
 /** Run one command. Returns the process exit code. */
 export const runCli = async (
   argv: ReadonlyArray<string>,
@@ -262,6 +308,16 @@ export const runCli = async (
   if (command.kind === "version") {
     hooks.stdout(`notty ${hooks.version}\n`);
     return 0;
+  }
+
+  if (command.kind === "update") {
+    try {
+      await runUpdateCommand(command, hooks);
+      return 0;
+    } catch (cause) {
+      hooks.stderr(`notty: ${messageOf(cause)}\n`);
+      return 1;
+    }
   }
 
   if (command.kind === "skill-print" || command.kind === "skill-install") {

@@ -95,6 +95,11 @@ export type CliCommand =
       readonly json: boolean;
       readonly folder: string;
     }
+  | {
+      readonly kind: "update";
+      readonly json: boolean;
+      readonly checkOnly?: boolean;
+    }
   | { readonly kind: "skill-print" }
   | { readonly kind: "skill-install"; readonly json: boolean };
 
@@ -114,6 +119,7 @@ const BOOLEAN_FLAGS = new Set([
   "--pinned",
   "--archived",
   "--all",
+  "--check",
   "--help",
   "--version",
 ]);
@@ -404,6 +410,13 @@ export const parseArgv = (argv: ReadonlyArray<string>): CliCommand => {
       throw new CliUsageError("skill needs `print` or `install`");
     }
 
+    case "update":
+      return {
+        kind: "update",
+        json,
+        ...(tokens.flags.has("--check") ? { checkOnly: true } : {}),
+      };
+
     default:
       throw new CliUsageError(`Unknown command: ${name}`);
   }
@@ -433,11 +446,14 @@ Usage:
   notty folder rename <old> <new>
   notty folder delete <folder>
 
+  notty update [--check] [--json]
+
   notty skill install [--json]
   notty skill print
 
 Options:
   --json       Print machine-readable JSON instead of plain text.
+  --check      Only report whether a newer release exists.
   --help       Show this help.
   --version    Show the CLI version.
 
