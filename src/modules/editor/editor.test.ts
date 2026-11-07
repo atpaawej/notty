@@ -1,4 +1,7 @@
+import { Markdown } from "@tiptap/markdown";
+import { Editor } from "@tiptap/react";
 import { describe, expect, it } from "vitest";
+import { editorExtensions } from "./extensions";
 import { normalizeMarkdown } from "./index";
 
 /** Markdown covering every inline and block object #6 ships. */
@@ -149,6 +152,73 @@ describe("Image round-trip", () => {
 
     expect(saved).not.toContain("data:");
     expect(saved).not.toContain("base64");
+  });
+});
+
+describe("Markdown content updates", () => {
+  const createEditor = () =>
+    new Editor({
+      extensions: [...editorExtensions, Markdown],
+      content: { type: "doc", content: [{ type: "paragraph" }] },
+      element: null,
+    });
+
+  it("parses setContent with contentType markdown into rich node types", () => {
+    const editor = createEditor();
+
+    try {
+      editor.commands.setContent(
+        [
+          "# Heading one",
+          "",
+          "> A quote",
+          "",
+          "- [ ] Buy milk",
+          "",
+          "Closing paragraph.",
+        ].join("\n"),
+        { emitUpdate: false, contentType: "markdown" },
+      );
+
+      const { doc } = editor.state;
+      const types: string[] = [];
+      doc.forEach((node) => types.push(node.type.name));
+
+      expect(types).toEqual([
+        "heading",
+        "blockquote",
+        "taskList",
+        "paragraph",
+      ]);
+      expect(doc.child(0).attrs.level).toBe(1);
+      expect(doc.child(2).firstChild?.attrs.checked).toBe(false);
+    } finally {
+      editor.destroy();
+    }
+  });
+
+  it("replaces a previous document when switching notes", () => {
+    const editor = createEditor();
+
+    try {
+      editor.commands.setContent("# First note", {
+        emitUpdate: false,
+        contentType: "markdown",
+      });
+      editor.commands.setContent("Just a paragraph.", {
+        emitUpdate: false,
+        contentType: "markdown",
+      });
+
+      const types: string[] = [];
+      editor.state.doc.forEach((node) => types.push(node.type.name));
+
+      expect(types).toEqual(["paragraph"]);
+      expect(editor.getText()).toBe("Just a paragraph.");
+      expect(editor.getText()).not.toContain("#");
+    } finally {
+      editor.destroy();
+    }
   });
 });
 
