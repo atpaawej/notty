@@ -14,6 +14,7 @@ import {
   useSyncExternalStore,
   type MouseEvent as ReactMouseEvent,
 } from "react";
+import { createPortal } from "react-dom";
 import { NoteEditor, type ClipboardImageReader, type ImageUpload, type StoredImage } from "../editor";
 import type { NoteSummary } from "../note-index";
 import {
@@ -115,6 +116,11 @@ interface MenuPosition {
  * The one contextual action menu used by folders and notes. It is opened by a
  * `···` trigger that only appears on hover, focus or selection, and closes on
  * an outside click, Escape, scrolling or a resize.
+ *
+ * The popup is portalled to `document.body` because its coordinates are
+ * viewport-relative. Note rows use `content-visibility: auto`, which makes
+ * each row a containing block and clips its descendants, so an inline popup
+ * would be positioned relative to the row and painted outside it.
  */
 function ActionMenu({
   label,
@@ -189,31 +195,34 @@ function ActionMenu({
       >
         <span aria-hidden="true">···</span>
       </button>
-      {position === null ? null : (
-        <div
-          ref={menu}
-          className="item-menu-popup"
-          role="menu"
-          aria-label={`Actions for ${label}`}
-          style={{ top: position.top, right: position.right }}
-        >
-          {actions.map((action) => (
-            <button
-              key={action.label}
-              type="button"
-              role="menuitem"
-              className={action.danger === true ? "is-danger" : undefined}
-              onClick={(event) => {
-                event.stopPropagation();
-                setPosition(null);
-                action.onSelect();
-              }}
+      {position === null
+        ? null
+        : createPortal(
+            <div
+              ref={menu}
+              className="item-menu-popup"
+              role="menu"
+              aria-label={`Actions for ${label}`}
+              style={{ top: position.top, right: position.right }}
             >
-              {action.label}
-            </button>
-          ))}
-        </div>
-      )}
+              {actions.map((action) => (
+                <button
+                  key={action.label}
+                  type="button"
+                  role="menuitem"
+                  className={action.danger === true ? "is-danger" : undefined}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setPosition(null);
+                    action.onSelect();
+                  }}
+                >
+                  {action.label}
+                </button>
+              ))}
+            </div>,
+            document.body,
+          )}
     </div>
   );
 }
