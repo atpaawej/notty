@@ -9,9 +9,11 @@
  */
 import { deriveAutoTitle, type Note } from "../note-file";
 import type {
+  FileSyncResult,
   IndexedNote,
   NoteSummary,
 } from "../note-index";
+import type { VaultChangeEvent } from "../vault";
 
 /** The persistence surface the workspace needs. */
 export interface NoteStore {
@@ -21,6 +23,15 @@ export interface NoteStore {
   }) => Promise<ReadonlyArray<NoteSummary>>;
   readonly get: (id: string) => Promise<IndexedNote | null>;
   readonly save: (note: Note, folder: string) => Promise<IndexedNote>;
+  /** Reconcile one externally changed vault file into the index. */
+  readonly syncFile: (relativePath: string) => Promise<FileSyncResult>;
+  /**
+   * Realtime vault changes. Omitted by runtimes without a watcher; the
+   * workspace then behaves exactly as it did before #74.
+   */
+  readonly watchVault?: (
+    onChange: (event: VaultChangeEvent) => Promise<void> | void,
+  ) => Promise<() => void>;
   /** Full-text search over note titles and bodies, from the index only. */
   readonly search: (
     query: string,
@@ -127,6 +138,11 @@ export interface WorkspaceController {
   readonly emptyTrash: () => Promise<void>;
   /** Update the body; auto-title follows unless the title is user-owned. */
   readonly setBody: (markdown: string) => void;
+  /**
+   * Record whether the editor holds keystrokes not yet serialized. While
+   * true, an external change to the open note never overwrites them.
+   */
+  readonly setEditing: (dirty: boolean) => void;
   /** Take ownership of the title; auto-titling stops permanently. */
   readonly setTitle: (title: string) => void;
   /** Write any pending edit now. Safe to call repeatedly. */
@@ -286,6 +302,12 @@ export function createWorkspace(
   let searchTimer: ReturnType<typeof setTimeout> | null = null;
   let searchGeneration = 0;
   let chain: Promise<void> = Promise.resolve();
+  /** True between a keystroke and the editor's serialization debounce. */
+  let editorDirty = false;
+  let disposed = false;
+  let stopWatching: (() => void) | null = null;
+  /** Reconciles vault events one at a time, in arrival order. */
+  let reconcileChain: Promise<void> = Promise.resolve();
 
   let markReady: () => void = () => undefined;
   const ready = new Promise<void>((resolve) => {
@@ -368,6 +390,158 @@ export function createWorkspace(
     await chain;
   };
 
+  /**
+   * Queue the current edit without waiting for disk. Navigation uses this so
+   * opening the next note never pauses behind the previous note's write.
+   */
+  const flushInBackground = (): void => {
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    const save = pending;
+    pending = null;
+    if (save !== null) enqueue(save);
+  };
+
+  const sameFolders = (
+    left: ReadonlyArray<string>,
+    right: ReadonlyArray<string>,
+  ): boolean =>
+    left.length === right.length &&
+    left.every((folder, index) => folder === right[index]);
+
+  const refreshFolders = async (): Promise<void> => {
+    try {
+      const folders = sortedFolders(await store.listFolders());
+      if (disposed || sameFolders(folders, state.folders)) return;
+      update({ ...state, folders });
+    } catch (cause) {
+      console.warn("Notty could not refresh folders", cause);
+    }
+  };
+
+  /** True while the open buffer owns keystrokes an external change must not clobber. */
+  const bufferIsDirty = (id: string): boolean =>
+    draft?.id === id &&
+    (editorDirty || (pending !== null && pending.note.id === id));
+
+  /**
+   * Apply one vault event. The index reconciles a single file; the workspace
+   * then updates just that row, leaving every other note and the editor
+   * untouched unless the changed file is the one on screen.
+   */
+  const applyExternalChange = async (
+    event: VaultChangeEvent,
+  ): Promise<void> => {
+    if (disposed) return;
+
+    if (event.isDirectory === true) {
+      await refreshFolders();
+      return;
+    }
+
+    const result = await store.syncFile(event.path);
+    // `unchanged` is Notty's own auto-save echo: no SQL ran, so no render.
+    if (result.status === "ignored" || result.status === "unchanged") return;
+
+    if (result.status === "removed") {
+      allNotes = allNotes.filter((note) => note.id !== result.id);
+      trashNotes = trashNotes.filter((note) => note.id !== result.id);
+      const wasOpen = draft !== null && draft.id === result.id;
+      if (wasOpen) {
+        draft = null;
+        draftFolder = "";
+      }
+      update({
+        ...state,
+        notes: notesForView(
+          state.selectedView,
+          allNotes,
+          state.selectedFolder,
+          trashNotes,
+        ),
+        searchResults: state.searchResults.filter(
+          (note) => note.id !== result.id,
+        ),
+        ...(wasOpen ? { selectedId: null, selected: null } : {}),
+      });
+      await refreshFolders();
+      return;
+    }
+
+    const summary = summaryOf(result.note.note, result.note.folder);
+    const isOpen = draft !== null && draft.id === summary.id;
+
+    // A dirty buffer wins in memory. The next auto-save writes the user's
+    // keystrokes over the external version, so the two never interleave.
+    if (isOpen && bufferIsDirty(summary.id)) return;
+
+    allNotes = withSummary(allNotes, summary);
+    const searchResults = state.searchResults.some(
+      (note) => note.id === summary.id,
+    )
+      ? withSummary(state.searchResults, summary)
+      : state.searchResults;
+
+    if (isOpen && draft !== null) {
+      draft = result.note.note;
+      draftFolder = result.note.folder;
+      update({
+        ...state,
+        notes: notesForView(
+          state.selectedView,
+          allNotes,
+          state.selectedFolder,
+          trashNotes,
+        ),
+        searchResults,
+        selectedId: summary.id,
+        selected: editorNote(result.note.note),
+      });
+    } else {
+      update({
+        ...state,
+        notes: notesForView(
+          state.selectedView,
+          allNotes,
+          state.selectedFolder,
+          trashNotes,
+        ),
+        searchResults,
+      });
+    }
+
+    // A note arriving in a folder the sidebar has not seen means an external
+    // folder appeared. Refreshing only in that case keeps the common update
+    // path free of a directory walk.
+    if (summary.folder.length > 0 && !state.folders.includes(summary.folder)) {
+      await refreshFolders();
+    }
+  };
+
+  const subscribeToVault = async (): Promise<void> => {
+    if (store.watchVault === undefined) return;
+    try {
+      const stop = await store.watchVault((event) => {
+        reconcileChain = reconcileChain
+          .then(() => applyExternalChange(event))
+          .catch((cause: unknown) => {
+            console.warn("Notty could not apply a vault change", cause);
+          });
+      });
+      if (disposed) {
+        stop();
+        return;
+      }
+      stopWatching = stop;
+    } catch (cause) {
+      // A watcher that cannot start must not stop the app from opening; the
+      // startup rebuild still makes the index correct.
+      console.warn("Notty could not watch the vault", cause);
+    }
+  };
+
   const schedule = (note: Note): void => {
     pending = { note, folder: draftFolder };
     if (timer !== null) clearTimeout(timer);
@@ -388,7 +562,8 @@ export function createWorkspace(
     if (state.searchQuery.length > 0) setSearchQuery("");
     // Queue the previous draft's save without waiting for disk: capture must
     // not pause behind an unrelated write.
-    if (draft !== null) void flush();
+    if (draft !== null) flushInBackground();
+    editorDirty = false;
 
     const createdAt = now().toISOString();
     const note: Note = {
@@ -423,7 +598,10 @@ export function createWorkspace(
     // Trashed notes are not openable; the list only offers restore and purge.
     if (state.selectedView === "trash") return;
     if (draft !== null && draft.id === id) return;
-    await flush();
+    // The previous note persists in the background; opening the clicked note
+    // never waits on disk I/O.
+    flushInBackground();
+    editorDirty = false;
 
     try {
       const found = await store.get(id);
@@ -469,6 +647,7 @@ export function createWorkspace(
     // hidden note cannot keep saving in the background.
     draft = null;
     draftFolder = "";
+    editorDirty = false;
     try {
       trashNotes = [...(await store.listTrash())].sort(compareSummaryByModified);
       update({
@@ -846,6 +1025,7 @@ export function createWorkspace(
 
   const setBody = (body: string): void => {
     if (draft === null) return;
+    editorDirty = false;
     const note: Note = {
       ...draft,
       body,
@@ -854,6 +1034,10 @@ export function createWorkspace(
     };
     show(note);
     schedule(note);
+  };
+
+  const setEditing = (dirty: boolean): void => {
+    editorDirty = dirty;
   };
 
   const setTitle = (title: string): void => {
@@ -928,6 +1112,7 @@ export function createWorkspace(
   };
 
   void load();
+  void subscribeToVault();
 
   return {
     getState: () => state,
@@ -957,8 +1142,12 @@ export function createWorkspace(
     emptyTrash,
     setBody,
     setTitle,
+    setEditing,
     flush,
     dispose: () => {
+      disposed = true;
+      stopWatching?.();
+      stopWatching = null;
       if (searchTimer !== null) {
         clearTimeout(searchTimer);
         searchTimer = null;

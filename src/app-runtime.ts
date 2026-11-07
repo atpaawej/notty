@@ -33,6 +33,7 @@ import {
 import {
   Vault,
   vaultTauriLayer,
+  watchVault,
   type VaultError,
   type VaultShape,
 } from "./modules/vault";
@@ -75,6 +76,9 @@ export const noteStore: NoteStore = {
   list: (options) => withIndex((index) => index.list(options)),
   get: (id) => withIndex((index) => index.get(id)),
   save: (note, folder) => withIndex((index) => index.save(note, folder)),
+  syncFile: (relativePath) =>
+    withIndex((index) => index.syncFile(relativePath)),
+  watchVault: (onChange) => watchVault(vaultRoot, onChange),
   search: (query, limit) => withIndex((index) => index.search(query, limit)),
   listFolders: () =>
     withVault((vault) =>
