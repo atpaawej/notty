@@ -9,6 +9,7 @@
 import { Effect } from "effect";
 import {
   ATTACHMENTS_DIRECTORY,
+  deriveAutoTitle,
   parse,
   serialize,
   type Note,
@@ -16,6 +17,7 @@ import {
 import type { SqlDriver, SqlStatement, SqlValue } from "./driver";
 import {
   NoteIndexError,
+  type FileSyncResult,
   type IndexedNote,
   type ListOptions,
   type NoteIndexShape,
@@ -29,7 +31,9 @@ import {
   DELETE_FTS,
   DELETE_NOTE,
   DROP_SCHEMA,
+  GET_FINGERPRINT_BY_PATH,
   GET_NOTE,
+  GET_NOTE_ID_BY_PATH,
   GET_NOTE_PATH,
   INSERT_FTS,
   INTEGRITY_CHECK,
@@ -328,7 +332,11 @@ export const makeNoteIndex = (
       const notes: NoteSummary[] = [];
 
       for (const file of files) {
-        const note = await readNote(storage, absolutePath(trashRoot, file.path));
+        const note = await readNote(
+          storage,
+          absolutePath(trashRoot, file.path),
+          file.path,
+        );
         if (note === null) continue;
         notes.push({
           id: note.id,
@@ -403,13 +411,95 @@ export const makeNoteIndex = (
       return merged.map(toSummary);
     });
 
+  const syncFile = (
+    relativePath: string,
+  ): Effect.Effect<FileSyncResult, NoteIndexError> =>
+    attempt("syncFile", relativePath, async () => {
+      const path = normalizeRelativePath(relativePath);
+      if (!isIndexableRelativePath(path)) {
+        return { status: "ignored" } as const;
+      }
+
+      const absolute = absolutePath(root, path);
+      const existing = (
+        await driver.select<{ id: string }>({
+          sql: GET_NOTE_ID_BY_PATH,
+          params: [path],
+        })
+      )[0];
+
+      const info = await storage.stat(absolute);
+      if (info === null) {
+        if (existing === undefined) return { status: "unchanged" } as const;
+        await driver.transaction([
+          { sql: DELETE_NOTE, params: [existing.id] },
+          { sql: DELETE_FTS, params: [existing.id] },
+        ]);
+        return { status: "removed", id: existing.id, path } as const;
+      }
+
+      if (existing !== undefined) {
+        const fingerprint = (
+          await driver.select<FingerprintRow>({
+            sql: GET_FINGERPRINT_BY_PATH,
+            params: [path],
+          })
+        )[0];
+        // Notty's own auto-save wrote this file: the row already carries the
+        // stat of that exact write, so the watcher event is an echo.
+        if (
+          fingerprint !== undefined &&
+          Number(fingerprint.source_mtime) === Math.trunc(info.mtime) &&
+          Number(fingerprint.source_size) === info.size
+        ) {
+          return { status: "unchanged" } as const;
+        }
+      }
+
+      const note = noteFromContents(
+        await storage.readTextFile(absolute),
+        path,
+        info,
+      );
+      const folder = folderOf(path);
+      const statements: SqlStatement[] = [];
+      if (existing !== undefined && existing.id !== note.id) {
+        // The file's identity changed under the same path (rare, but an
+        // external tool may rewrite frontmatter). Drop the old row first so
+        // listing cannot show both notes.
+        statements.push(
+          { sql: DELETE_NOTE, params: [existing.id] },
+          { sql: DELETE_FTS, params: [existing.id] },
+        );
+      }
+      statements.push(...noteStatements(note, folder, path, info));
+      await driver.transaction(statements);
+
+      return {
+        status: "upserted",
+        note: { note, folder },
+        path,
+      } as const;
+    });
+
   const rebuild = (): Effect.Effect<void, NoteIndexError> =>
     attempt("rebuild", undefined, async () => {
       await resetSchema(driver);
       await replaceAll(driver, root, storage);
     });
 
-  return { list, get, save, search, trash, restore, listTrash, purge, rebuild };
+  return {
+    list,
+    get,
+    save,
+    syncFile,
+    search,
+    trash,
+    restore,
+    listTrash,
+    purge,
+    rebuild,
+  };
 };
 
 /**
@@ -516,7 +606,11 @@ const isCurrent = async (
 
     // A Markdown file the index has never seen. Stray, unindexable files are
     // ignored; a real note means the index is stale.
-    const note = await readNote(storage, absolutePath(root, file.path));
+    const note = await readNote(
+      storage,
+      absolutePath(root, file.path),
+      file.path,
+    );
     if (note !== null) return false;
   }
 
@@ -535,7 +629,11 @@ const replaceAll = async (
   ];
 
   for (const file of files) {
-    const note = await readNote(storage, absolutePath(root, file.path));
+    const note = await readNote(
+      storage,
+      absolutePath(root, file.path),
+      file.path,
+    );
     if (note === null) continue;
     statements.push(
       ...noteStatements(note, folderOf(file.path), file.path, file),
@@ -608,9 +706,83 @@ const collectNotes = async (
 const readNote = async (
   storage: NoteStorage,
   path: string,
+  relativePath: string,
 ): Promise<Note | null> => {
-  const note = parse(await storage.readTextFile(path));
-  return note.id.length === 0 ? null : note;
+  const parsed = parse(await storage.readTextFile(path));
+  if (parsed.id.length > 0) return parsed;
+
+  // A Markdown file written by an external tool may have no frontmatter. It
+  // is still a note; its identity comes from the path so every rebuild agrees.
+  const info = await storage.stat(path);
+  if (info === null) return null;
+  return externalNote(parsed, relativePath, info);
+};
+
+/**
+ * Turn file contents into a Note. Files with frontmatter keep it verbatim;
+ * stray Markdown gets a deterministic id derived only from its vault path, so
+ * an agent can drop `groceries.md` into the vault and it indexes consistently.
+ */
+const noteFromContents = (
+  contents: string,
+  relativePath: string,
+  info: NoteStorageStat,
+): Note => {
+  const parsed = parse(contents);
+  return parsed.id.length > 0
+    ? parsed
+    : externalNote(parsed, relativePath, info);
+};
+
+const externalNote = (
+  parsed: Note,
+  relativePath: string,
+  info: NoteStorageStat,
+): Note => {
+  const timestamp = new Date(info.mtime).toISOString();
+  return {
+    id: externalNoteId(relativePath),
+    title: deriveAutoTitle(timestamp, parsed.body, {}),
+    created: timestamp,
+    modified: timestamp,
+    pinned: false,
+    archived: false,
+    body: parsed.body,
+    ...(parsed.extra === undefined ? {} : { extra: parsed.extra }),
+  };
+};
+
+/** FNV-1a twice, so a path-derived identity is stable and collision-resistant. */
+const externalNoteId = (relativePath: string): string => {
+  let first = 2166136261;
+  let second = 0x9e3779b9;
+  for (let index = 0; index < relativePath.length; index += 1) {
+    const code = relativePath.charCodeAt(index);
+    first = Math.imul(first ^ code, 16777619);
+    second = Math.imul(second ^ code, 2246822519);
+  }
+  const hex = (value: number): string =>
+    (value >>> 0).toString(16).padStart(8, "0");
+  return `md-${hex(first)}${hex(second)}`;
+};
+
+const normalizeRelativePath = (path: string): string =>
+  path
+    .replace(/\\/g, "/")
+    .replace(/^\.\/+/, "")
+    .replace(/^\/+/, "")
+    .replace(/\/{2,}/g, "/");
+
+const isIndexableRelativePath = (path: string): boolean => {
+  const segments = path.split("/").filter((segment) => segment.length > 0);
+  if (segments.length === 0) return false;
+  if (segments.some((segment) => segment === ".." || segment.startsWith("."))) {
+    return false;
+  }
+  if (segments[0] === ATTACHMENTS_DIRECTORY) return false;
+  const basename = segments[segments.length - 1] ?? "";
+  if (basename.startsWith("notty.db")) return false;
+  return basename.toLowerCase().endsWith(MARKDOWN_SUFFIX);
 };
 
 const stripTrailingSlash = (path: string): string => path.replace(/\/+$/, "");
@@ -657,7 +829,11 @@ const findTrashedNote = async (
   const files = await collectNotes(trashRoot, storage);
 
   for (const file of files) {
-    const note = await readNote(storage, absolutePath(trashRoot, file.path));
+    const note = await readNote(
+      storage,
+      absolutePath(trashRoot, file.path),
+      file.path,
+    );
     if (note !== null && note.id === id) {
       return { note, relativePath: file.path };
     }

@@ -459,6 +459,107 @@ for (const adapter of adapters) {
       ).resolves.toMatchObject([{ id: "startup" }]);
     });
 
+    it("indexes one externally created file without scanning the vault", async () => {
+      const note = makeNote("agent-note", { body: "Written by an agent" });
+
+      const outcome = await withIndex(layer(), (index) =>
+        Effect.gen(function* () {
+          // Written after the index opened, so only `syncFile` can see it.
+          yield* Effect.promise(() =>
+            writeNoteFile("Work/agent-note.md", note),
+          );
+          const result = yield* index.syncFile("Work/agent-note.md");
+          const listed = yield* index.list();
+          return { result, listed };
+        }),
+      );
+
+      expect(outcome.result).toMatchObject({
+        status: "upserted",
+        path: "Work/agent-note.md",
+        note: { folder: "Work", note: { id: "agent-note" } },
+      });
+      expect(outcome.listed).toMatchObject([
+        { id: "agent-note", folder: "Work", title: note.title },
+      ]);
+    });
+
+    it("updates one externally modified file in place", async () => {
+      await writeNoteFile("edited.md", makeNote("edited", { body: "old" }));
+
+      const outcome = await withIndex(layer(), (index) =>
+        Effect.gen(function* () {
+          yield* index.syncFile("edited.md");
+          yield* Effect.promise(() =>
+            writeNoteFile(
+              "edited.md",
+              makeNote("edited", { body: "new body", title: "New title" }),
+            ),
+          );
+          const result = yield* index.syncFile("edited.md");
+          const found = yield* index.get("edited");
+          return { result, found };
+        }),
+      );
+
+      expect(outcome.result.status).toBe("upserted");
+      expect(outcome.found?.note.body).toBe("new body");
+      expect(outcome.found?.note.title).toBe("New title");
+    });
+
+    it("removes the row when the file disappears", async () => {
+      await writeNoteFile("gone.md", makeNote("gone"));
+
+      const outcome = await withIndex(layer(), (index) =>
+        Effect.gen(function* () {
+          yield* index.syncFile("gone.md");
+          yield* Effect.promise(() => unlink(join(vaultRoot, "gone.md")));
+          const result = yield* index.syncFile("gone.md");
+          const listed = yield* index.list();
+          return { result, listed };
+        }),
+      );
+
+      expect(outcome.result).toMatchObject({ status: "removed", id: "gone" });
+      expect(outcome.listed).toEqual([]);
+    });
+
+    it("ignores the echo of Notty's own save via the stat fingerprint", async () => {
+      const outcome = await withIndex(layer(), (index) =>
+        Effect.gen(function* () {
+          yield* index.save(makeNote("echo"), "");
+          const result = yield* index.syncFile("echo.md");
+          return result;
+        }),
+      );
+
+      expect(outcome.status).toBe("unchanged");
+    });
+
+    it("accepts raw Markdown without frontmatter and gives it a stable id", async () => {
+      const outcome = await withIndex(layer(), (index) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            writeFile(join(vaultRoot, "from-agent.md"), "# Agent note\n\nBody"),
+          );
+          const first = yield* index.syncFile("from-agent.md");
+          const afterSync = yield* index.list();
+          yield* index.rebuild();
+          const afterRebuild = yield* index.list();
+          return { first, afterSync, afterRebuild };
+        }),
+      );
+
+      if (outcome.first.status !== "upserted") {
+        throw new Error(`Expected an upsert, got ${outcome.first.status}`);
+      }
+      const id = outcome.first.note.note.id;
+      expect(id).toMatch(/^md-[0-9a-f]{16}$/);
+      expect(outcome.first.note.note.title).toBe("Agent note");
+      expect(outcome.afterSync.map((note) => note.id)).toEqual([id]);
+      expect(outcome.afterRebuild.map((note) => note.id)).toEqual([id]);
+    });
+
     it("detects a stale note file by its fingerprint at startup", async () => {
       await withIndex(layer(), (index) =>
         index.save(makeNote("stale", { body: "old body" }), ""),
