@@ -51,7 +51,7 @@ This module has no I/O. It is pure and is the primary unit-test target.
 
 Interface: list, get, save, search, syncFile, trash, restore, rebuild.
 
-Ownership: `note-index` writes note files. `save` serialises with `note-file`, writes the file first, then upserts the index row. `syncFile` reconciles one externally changed path from a single read and reports `ignored`, `unchanged`, `removed` or `upserted`. `trash` moves the file under `.trash/` before deleting its row; `restore` reverses that using the path below `.trash/`. `vault` keeps creation, paths, attachments and the Trash sweep; `note-file` stays pure.
+Ownership: `note-index` writes note files. `save` serialises with `note-file`, writes the file first, then upserts the index row. `syncFile` reconciles one externally changed path from a single read and reports `ignored`, `unchanged` (the fingerprint matched, but the indexed note comes back for callers whose in-memory list may be stale), `removed` or `upserted`. `trash` moves the file under `.trash/` before deleting its row; `restore` reverses that using the path below `.trash/`. `vault` keeps creation, paths, attachments and the Trash sweep; `note-file` stays pure.
 
 Hides: the SQLite schema, the standalone FTS5 table (synced explicitly in the same transaction as `notes`, no triggers), transaction boundaries, mirroring of frontmatter columns, stat fingerprints that suppress the echo of Notty's own save, path-derived ids for raw Markdown, WAL and busy-timeout connection settings, rebuild-on-corruption.
 

@@ -915,6 +915,27 @@ describe("realtime vault changes", () => {
     workspace.dispose();
   });
 
+  it("drops a note the CLI trashed before the watcher fires", async () => {
+    const watcher = createMemoryVaultWatcher();
+    const store = makeWatchedStore(vaultRoot, watcher);
+    const workspace = createWorkspace(store, options());
+    await workspace.ready;
+    await workspace.createNote();
+    workspace.setBody("Trash me from the CLI");
+    await workspace.flush();
+    const id = workspace.getState().selectedId as string;
+
+    // The CLI moves the file to Trash and deletes its row from the shared
+    // index, so the desktop watcher sees a removal the index no longer names.
+    await store.trashNote(id);
+    watcher.emit({ kind: "remove", path: `${id}.md` });
+
+    await waitFor(() => workspace.getState().notes.length === 0);
+    expect(workspace.getState().selectedId).toBeNull();
+    expect(workspace.getState().selected).toBeNull();
+    workspace.dispose();
+  });
+
   it("reflects a note moved into a new folder outside Notty", async () => {
     const watcher = createMemoryVaultWatcher();
     const workspace = createWorkspace(
@@ -942,6 +963,62 @@ describe("realtime vault changes", () => {
         .notes.some((note) => note.id === id && note.folder === "Work"),
     );
     expect(workspace.getState().folders).toContain("Work");
+    workspace.dispose();
+  });
+
+  it("shows a note the CLI already indexed before the watcher fires", async () => {
+    const watcher = createMemoryVaultWatcher();
+    const store = makeWatchedStore(vaultRoot, watcher);
+    const workspace = createWorkspace(store, options());
+    await workspace.ready;
+    await settle();
+
+    await writeFile(
+      join(vaultRoot, "from-cli.md"),
+      serialize(externalNote("from-cli", "From the CLI", "Typed in a terminal")),
+    );
+    // The CLI writes the file and commits its fingerprint to the shared index
+    // before the desktop sees the watcher event.
+    const synced = await store.syncFile("from-cli.md");
+    expect(synced.status).toBe("upserted");
+
+    watcher.emit({ kind: "create", path: "from-cli.md" });
+
+    await waitFor(() =>
+      workspace.getState().notes.some((note) => note.id === "from-cli"),
+    );
+    expect(workspace.getState().notes[0]?.title).toBe("From the CLI");
+    expect(workspace.getState().notes[0]?.folder).toBe("");
+    workspace.dispose();
+  });
+
+  it("reloads an open note the CLI already indexed before the watcher fires", async () => {
+    const watcher = createMemoryVaultWatcher();
+    const store = makeWatchedStore(vaultRoot, watcher);
+    const workspace = createWorkspace(store, options());
+    await workspace.ready;
+    await workspace.createNote();
+    workspace.setBody("Desktop body");
+    await workspace.flush();
+    const id = workspace.getState().selectedId as string;
+
+    await writeFile(
+      join(vaultRoot, `${id}.md`),
+      serialize(
+        externalNote(id, "From the CLI", "A much longer external body"),
+      ),
+    );
+    const synced = await store.syncFile(`${id}.md`);
+    expect(synced.status).toBe("upserted");
+
+    watcher.emit({ kind: "update", path: `${id}.md` });
+
+    await waitFor(
+      () =>
+        workspace.getState().selected?.body ===
+        "A much longer external body",
+    );
+    expect(workspace.getState().notes[0]?.title).toBe("From the CLI");
     workspace.dispose();
   });
 
