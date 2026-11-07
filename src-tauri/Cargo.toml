@@ -1,6 +1,6 @@
 [package]
 name = "notty"
-version = "0.2.4"
+version = "0.2.5"
 description = "Local-first notes for Linux — plain Markdown files, Apple Notes feel"
 authors = ["Aawej Pathan"]
 license = "MIT"
