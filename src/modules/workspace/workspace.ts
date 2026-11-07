@@ -201,6 +201,15 @@ const withSummary = (
 ): ReadonlyArray<NoteSummary> =>
   sorted([...notes.filter((note) => note.id !== summary.id), summary]);
 
+const sameSummary = (left: NoteSummary, right: NoteSummary): boolean =>
+  left.id === right.id &&
+  left.title === right.title &&
+  left.created === right.created &&
+  left.modified === right.modified &&
+  left.pinned === right.pinned &&
+  left.archived === right.archived &&
+  left.folder === right.folder;
+
 const sortedFolders = (
   folders: ReadonlyArray<string>,
 ): ReadonlyArray<string> => [...folders].sort((left, right) => left.localeCompare(right));
@@ -442,17 +451,47 @@ export function createWorkspace(
     }
 
     const result = await store.syncFile(event.path);
-    // `unchanged` is Notty's own auto-save echo: no SQL ran, so no render.
-    if (result.status === "ignored" || result.status === "unchanged") return;
+    if (result.status === "ignored") return;
 
     if (result.status === "removed") {
-      allNotes = allNotes.filter((note) => note.id !== result.id);
-      trashNotes = trashNotes.filter((note) => note.id !== result.id);
-      const wasOpen = draft !== null && draft.id === result.id;
+      const expectedDraftPath =
+        draft === null
+          ? null
+          : draftFolder.length === 0
+            ? `${draft.id}.md`
+            : `${draftFolder}/${draft.id}.md`;
+      // The CLI deletes the row before the watcher fires, so the index may
+      // already have lost the id. The path still identifies the open buffer.
+      const removedId =
+        result.id ??
+        (draft !== null && expectedDraftPath === result.path
+          ? draft.id
+          : null);
+      const wasOpen = removedId !== null && draft !== null && draft.id === removedId;
+
+      if (result.id === null) {
+        // No row to name the note: re-read the list so a note the CLI removed
+        // from both the vault and the index does not linger on screen. Keep an
+        // optimistic draft that has not reached disk yet.
+        allNotes = sorted(await store.list({ includeArchived: true }));
+        if (!wasOpen && draft !== null) {
+          const optimistic = summaryOf(draft, draftFolder);
+          if (!allNotes.some((note) => note.id === optimistic.id)) {
+            allNotes = withSummary(allNotes, optimistic);
+          }
+        }
+      } else {
+        allNotes = allNotes.filter((note) => note.id !== result.id);
+      }
+
       if (wasOpen) {
         draft = null;
         draftFolder = "";
       }
+      trashNotes =
+        removedId === null
+          ? trashNotes
+          : trashNotes.filter((note) => note.id !== removedId);
       update({
         ...state,
         notes: notesForView(
@@ -461,15 +500,19 @@ export function createWorkspace(
           state.selectedFolder,
           trashNotes,
         ),
-        searchResults: state.searchResults.filter(
-          (note) => note.id !== result.id,
-        ),
+        searchResults:
+          removedId === null
+            ? state.searchResults
+            : state.searchResults.filter((note) => note.id !== removedId),
         ...(wasOpen ? { selectedId: null, selected: null } : {}),
       });
       await refreshFolders();
       return;
     }
 
+    // `unchanged` now carries the indexed note too: the CLI can write the file
+    // and its fingerprint to the shared index, so the desktop's in-memory list
+    // may be missing the note even though no SQL ran here.
     const summary = summaryOf(result.note.note, result.note.folder);
     const isOpen = draft !== null && draft.id === summary.id;
 
@@ -477,7 +520,23 @@ export function createWorkspace(
     // keystrokes over the external version, so the two never interleave.
     if (isOpen && bufferIsDirty(summary.id)) return;
 
+    const known = allNotes.find((note) => note.id === summary.id);
+    const editorIsCurrent =
+      !isOpen ||
+      (draft !== null &&
+        draft.title === result.note.note.title &&
+        draft.body === result.note.note.body &&
+        draft.titleLocked === result.note.note.titleLocked);
+
+    // The list already holds this exact version, so this is the echo of
+    // Notty's own auto-save and no render is needed.
+    if (known !== undefined && sameSummary(known, summary) && editorIsCurrent) {
+      return;
+    }
+
     allNotes = withSummary(allNotes, summary);
+    // A restored or externally recreated note no longer belongs in the Trash.
+    trashNotes = trashNotes.filter((note) => note.id !== summary.id);
     const searchResults = state.searchResults.some(
       (note) => note.id === summary.id,
     )
