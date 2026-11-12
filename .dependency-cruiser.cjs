@@ -14,6 +14,7 @@ const MODULES = [
   "workspace",
   "hotkey",
   "updater",
+  "site",
 ];
 
 const boundaryRules = MODULES.map((mod) => ({

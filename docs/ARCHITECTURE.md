@@ -1,6 +1,6 @@
 # Architecture
 
-Eight deep modules, one public interface each, wired through Effect Layers. Read this before adding a module or reaching into one.
+Nine modules, one public interface each, wired through Effect Layers. Read this before adding a module or reaching into one.
 
 ## Design language
 
@@ -25,6 +25,7 @@ src/modules/
   workspace/    owns the three-column UI state
   hotkey/       owns the configurable global shortcut
   updater/      owns release checks, staging and restart
+  site/         owns the static landing page
 ```
 
 Each folder exposes only `index.ts`. Anything else in the folder is private.
@@ -94,6 +95,14 @@ Interface: a reactive controller that checks GitHub Releases, downloads and stag
 Hides: release scheduling, version comparison, permission probing, the download/stage/verify sequence, temporary directories, and the pre-restart flush. A read-only system install stops at `Available` with `isUserSpace: false` and a release link.
 
 Adapters: the Tauri shell (production) and an in-memory adapter that models user-space, read-only, failed and partial-download cases without network or disk I/O (tests).
+
+### site
+
+Interface: the `Site` landing page, rendered as its own Vite entry (`site.html`) separate from the desktop window.
+
+Hides: marketing copy, the interactive three-column product demo, animated feature cards, and the landing page's token system. It imports no runtime module and no desktop code, so the page can ship as a static site. Product claims stay traceable to `docs/SPEC.md` and `docs/STORAGE.md`.
+
+This module is presentation, not a domain seam: no Effect Layer, no adapter pair.
 
 ## Seams
 
